@@ -122,7 +122,7 @@ class TestConfig:
 
     def test_default(self):
         c = HybridConfiguration()
-        assert c.ant_ratio == 0.4 and c.forward_steps == 100
+        assert c.ant_ratio == 0.4 and c.forward_steps == 500
 
     def test_ratios_must_sum(self):
         with pytest.raises(ValueError, match="must sum to 1.0"):
@@ -625,13 +625,13 @@ class TestCross:
 
     def test_hybrid_stats_validation(self):
         with pytest.raises(ValueError, match="iteration"):
-            HybridStatistics(iteration=-1, best_cost=0.0, avg_cost=0.0, diversity=0.0,
+            HybridStatistics(iteration=-1, best_cost=0.0, avg_cost=0.0, worst_cost=0.0, diversity=0.0,
                             alpha_a=1.0, alpha_b=1.0, alpha_p=1.0, alpha_h=1.0,
                             template_count=0, runtime_s=0.0)
 
     def test_hybrid_stats_runtime(self):
         with pytest.raises(ValueError, match="runtime_s"):
-            HybridStatistics(iteration=0, best_cost=0.0, avg_cost=0.0, diversity=0.0,
+            HybridStatistics(iteration=0, best_cost=0.0, avg_cost=0.0, worst_cost=0.0, diversity=0.0,
                             alpha_a=1.0, alpha_b=1.0, alpha_p=1.0, alpha_h=1.0,
                             template_count=0, runtime_s=-1.0)
 

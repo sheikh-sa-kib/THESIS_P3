@@ -201,7 +201,7 @@ class TestBCOConfiguration:
     def test_default_construction(self):
         config = SwarmConfig(hyperparameters={})
         bc = BCOConfiguration.from_config(config)
-        assert bc.forward_steps == 100
+        assert bc.forward_steps == 500
         assert bc.beta == 2.0
         assert bc.delta == 3.0
         assert bc.elite_count == 3
