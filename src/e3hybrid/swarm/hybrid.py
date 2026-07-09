@@ -587,6 +587,7 @@ class E3HybridRouting:
                 alpha_b=0.0,
                 alpha_p=0.0,
                 alpha_h=1.0,
+                inertia=1.0,
                 stream=init_stream,
             )
             cost_val = sum(self._edge_total_cost(self._graph.get_edge(eid))
@@ -650,6 +651,7 @@ class E3HybridRouting:
         alpha_b: float,
         alpha_p: float,
         alpha_h: float,
+        inertia: float,
         stream: Any | None,  # random.Random
     ) -> list[EdgeId]:
         current = source
@@ -685,7 +687,7 @@ class E3HybridRouting:
             # Compute raw influence values
             raw_A = [self._compute_raw_aco(e.edge_id, pheromones) for e in candidates]
             raw_B = [self._compute_raw_bco(e.edge_id, step, templates) for e in candidates]
-            raw_P = [self._compute_raw_pso(e.edge_id, step, p_best_route, g_best) for e in candidates]
+            raw_P = [self._compute_raw_pso(e.edge_id, step, current_route, p_best_route, g_best, inertia) for e in candidates]
             raw_H = [self._compute_raw_visibility(e.edge_id) for e in candidates]
 
             # Normalisation to [0, 1] (Eqs. 8-11)
@@ -750,12 +752,16 @@ class E3HybridRouting:
         self,
         edge_id: EdgeId,
         step: int,
+        current_route: list[EdgeId],
         p_best_route: list[EdgeId],
         g_best: list[EdgeId],
+        inertia: float,
     ) -> float:
-        M_p = 1.0 if step < len(p_best_route) and edge_id == p_best_route[step] else self._config.epsilon
-        M_g = 1.0 if step < len(g_best) and edge_id == g_best[step] else self._config.epsilon
-        return self._config.cognition_weight * M_p + self._config.social_weight * M_g
+        eps = self._config.epsilon
+        M_cur = 1.0 if step < len(current_route) and edge_id == current_route[step] else eps
+        M_p = 1.0 if step < len(p_best_route) and edge_id == p_best_route[step] else eps
+        M_g = 1.0 if step < len(g_best) and edge_id == g_best[step] else eps
+        return inertia * M_cur + self._config.cognition_weight * M_p + self._config.social_weight * M_g
 
     def _compute_raw_visibility(self, edge_id: EdgeId) -> float:
         return self._visibility.get(edge_id, 0.0)
@@ -816,6 +822,7 @@ class E3HybridRouting:
                 alpha_b=alpha_b_eff,
                 alpha_p=alpha_p_eff,
                 alpha_h=alpha_h_eff,
+                inertia=inertia,
                 stream=stream,
             )
 

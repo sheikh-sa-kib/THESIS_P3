@@ -259,16 +259,21 @@ class TestInfluence:
 
     def test_pso_both_match(self):
         r = E3HybridRouting(HybridConfiguration(cognition_weight=2, social_weight=3))
-        val = r._compute_raw_pso(EdgeId("e1"), 0, [EdgeId("e1")], [EdgeId("e1")])
-        assert val == 5.0
+        current = pbest = gbest = [EdgeId("e1")]
+        val = r._compute_raw_pso(EdgeId("e1"), 0, current, pbest, gbest, inertia=1.0)
+        assert val == 6.0  # inertia*M_cur + cog*M_p + soc*M_g = 1*1 + 2*1 + 3*1
 
     def test_pso_cognitive_only(self):
         r = E3HybridRouting(HybridConfiguration(cognition_weight=2, social_weight=0))
-        assert r._compute_raw_pso(EdgeId("e1"), 0, [EdgeId("e1")], []) == 2.0
+        current = pbest = [EdgeId("e1")]
+        val = r._compute_raw_pso(EdgeId("e1"), 0, current, pbest, [], inertia=1.0)
+        assert val == 3.0  # 1*1 + 2*1 + 0*eps
 
     def test_pso_no_match(self):
         r = E3HybridRouting(HybridConfiguration(cognition_weight=2, social_weight=2, epsilon=0.1))
-        assert r._compute_raw_pso(EdgeId("e3"), 0, [EdgeId("e1")], [EdgeId("e2")]) == pytest.approx(0.4)
+        current = [EdgeId("e1")]; pbest = [EdgeId("e2")]; gbest = []
+        val = r._compute_raw_pso(EdgeId("e3"), 0, current, pbest, gbest, inertia=1.0)
+        assert val == pytest.approx(0.5)  # 1*0.1 + 2*0.1 + 2*0.1
 
     def test_visibility_missing(self):
         r = E3HybridRouting()
