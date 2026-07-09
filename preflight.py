@@ -33,17 +33,21 @@ MIN_PYTHON = (3, 12)
 SUMO_VERSION_TARGET = "1.27.1"
 SUMO_VERSION_MIN = (1, 20, 0)
 SUMO_HOME_DEFAULT = Path(r"C:\Program Files (x86)\Eclipse\Sumo")
-REQUIRED_PACKAGES = {
-    "yaml": "PyYAML>=6.0.2",
-    "traci": "traci>=1.20.0",
-    "sumolib": "sumolib>=1.20.0",
+RUNTIME_PIP_PACKAGES = {
+    "yaml": "PyYAML",
+    "matplotlib": "matplotlib",
+    "psutil": "psutil",
 }
-OPTIONAL_PACKAGES = {
-    "matplotlib": "matplotlib (for plotting)",
-    "psutil": "psutil (for system info)",
-    "pytest": "pytest>=8.0 (for testing)",
+SUMO_PACKAGES = {
+    "traci": "traci (SUMO interface)",
+    "sumolib": "sumolib (SUMO library)",
+}
+DEV_PACKAGES = {
+    "pytest": "pytest (testing)",
 }
 REQUIRED_FILES = [
+    "requirements.txt",
+    "requirements-dev.txt",
     "data/maps/midtown_manhattan.net.xml",
     "data/routes/midtown_manhattan.rou.xml",
     "data/configs/midtown_manhattan.sumocfg",
@@ -54,7 +58,7 @@ REQUIRED_FILES = [
     "pyproject.toml",
     "VERSION",
 ]
-CHECKED: list[tuple[str, str, str]] = []
+CHECKED: list[tuple[str, str, str, str]] = []
 
 
 def _label(text: str) -> str:
@@ -62,14 +66,14 @@ def _label(text: str) -> str:
     return text + ("." * max(dots, 1))
 
 
-def _check(label: str, ok: bool, msg: str = "") -> str:
+def _check(label: str, ok: bool, msg: str = "", section: str = "env") -> str:
     status = _PASS if ok else _FAIL
-    CHECKED.append((label, status, msg))
+    CHECKED.append((label, status, msg, section))
     return status
 
 
-def _warn(label: str, msg: str) -> str:
-    CHECKED.append((label, _WARN, msg))
+def _warn(label: str, msg: str, section: str = "env") -> str:
+    CHECKED.append((label, _WARN, msg, section))
     return _WARN
 
 
@@ -177,28 +181,43 @@ def check_venv() -> None:
     )
     if venv_python.exists():
         extra = " (active)" if in_venv else " (run `.venv\\Scripts\\Activate.ps1` to activate)"
-        _warn("Virtual environment .venv", f"Exists{extra}")
+        _warn("Virtual environment .venv", f"Exists{extra}", "setup")
     else:
         _check("Virtual environment .venv", False,
-               "Not found. Run: python -m venv .venv && .venv\\Scripts\\Activate.ps1")
+               "Not found. Run: python -m venv .venv && .venv\\Scripts\\Activate.ps1",
+               "setup")
 
 
 # ---------------------------------------------------------------------------
 #  Python packages
 # ---------------------------------------------------------------------------
 def check_packages() -> None:
-    for pkg, desc in {**REQUIRED_PACKAGES, **OPTIONAL_PACKAGES}.items():
+    # Runtime pip packages
+    for pkg, desc in RUNTIME_PIP_PACKAGES.items():
         installed = _try_import(pkg)
-        if installed or pkg in OPTIONAL_PACKAGES:
-            if installed:
-                ver = _get_version(pkg)
-                _check(desc, True, f"{pkg} {ver}")
-            else:
-                install_hint = "pip install pyyaml" if pkg == "yaml" else f"pip install {pkg}"
-                _warn(desc, f"{pkg} not installed. Install with: {install_hint}")
+        if installed:
+            ver = _get_version(pkg)
+            _check(desc, True, f"{pkg} {ver}", "setup")
         else:
-            install_hint = "pip install pyyaml" if pkg == "yaml" else f"pip install {pkg}"
-            _check(desc, False, f"{pkg} not installed. Install with: {install_hint}")
+            _check(desc, False, f"{pkg} not installed", "setup")
+
+    # SUMO-bundled packages
+    for pkg, desc in SUMO_PACKAGES.items():
+        installed = _try_import(pkg)
+        if installed:
+            ver = _get_version(pkg)
+            _check(desc, True, f"{pkg} {ver}", "setup")
+        else:
+            _check(desc, False, f"{pkg} not importable", "setup")
+
+    # Dev packages
+    for pkg, desc in DEV_PACKAGES.items():
+        installed = _try_import(pkg)
+        if installed:
+            ver = _get_version(pkg)
+            _check(desc, True, f"{pkg} {ver}", "setup")
+        else:
+            _warn(desc, f"{pkg} not installed", "setup")
 
 
 # ---------------------------------------------------------------------------
@@ -215,11 +234,12 @@ def check_sumo() -> None:
 
     # SUMO_HOME
     if sumo_home.exists():
-        _check("SUMO_HOME directory", True, str(sumo_home))
+        _check("SUMO_HOME directory", True, str(sumo_home), "sumo")
     else:
         _check("SUMO_HOME directory", False,
                f"Not found at {sumo_home}. "
-               "Set SUMO_HOME environment variable to your SUMO installation directory.")
+               "Set SUMO_HOME environment variable to your SUMO installation directory.",
+               "sumo")
         return
 
     # sumo.exe
@@ -228,7 +248,7 @@ def check_sumo() -> None:
             r = subprocess.run([str(sumo_exe), "--version"],
                                capture_output=True, text=True, timeout=10)
             version_line = r.stdout.strip() or r.stderr.strip()
-            _check("sumo.exe", True, version_line[:80])
+            _check("sumo.exe", True, version_line[:80], "sumo")
             # Version check
             m = re.search(r"(\d+)\.(\d+)\.(\d+)", version_line)
             if m:
@@ -236,57 +256,60 @@ def check_sumo() -> None:
                 if ver < SUMO_VERSION_MIN:
                     _warn(f"SUMO version {m.group(0)}",
                           f"Minimum recommended is {SUMO_VERSION_TARGET}. "
-                          f"Some features may not work correctly.")
+                          f"Some features may not work correctly.",
+                          "sumo")
                 elif m.group(0) != SUMO_VERSION_TARGET:
                     _warn(f"SUMO version {m.group(0)}",
                           f"Target is {SUMO_VERSION_TARGET} but {m.group(0)} is installed. "
-                          f"This may cause minor differences.")
+                          f"This may cause minor differences.",
+                          "sumo")
         except Exception as e:
-            _check("sumo.exe", False, f"Failed to run: {e}")
+            _check("sumo.exe", False, f"Failed to run: {e}", "sumo")
     else:
         _check("sumo.exe", False,
-               f"Not found at {sumo_exe}. Reinstall SUMO from https://sumo.dlr.de/download/")
+               f"Not found at {sumo_exe}. Reinstall SUMO from https://sumo.dlr.de/download/",
+               "sumo")
 
     # sumo-gui.exe
     if sumo_gui.exists():
-        _check("sumo-gui.exe", True)
+        _check("sumo-gui.exe", True, section="sumo")
     else:
-        _warn("sumo-gui.exe", "Not found; GUI will not be available. (Headless mode is fine.)")
+        _warn("sumo-gui.exe", "Not found; GUI will not be available. (Headless mode is fine.)", "sumo")
 
     # duarouter
     if duarouter_exe.exists():
-        _check("duarouter.exe", True)
+        _check("duarouter.exe", True, section="sumo")
     else:
         _check("duarouter.exe", False,
-               f"Not found at {duarouter_exe}. Reinstall SUMO.")
+               f"Not found at {duarouter_exe}. Reinstall SUMO.", "sumo")
 
     # netconvert
     if netconvert_exe.exists():
-        _check("netconvert.exe", True)
+        _check("netconvert.exe", True, section="sumo")
     else:
         _check("netconvert.exe", False,
-               f"Not found at {netconvert_exe}. Reinstall SUMO.")
+               f"Not found at {netconvert_exe}. Reinstall SUMO.", "sumo")
 
     # randomTrips.py
     if random_trips.exists():
-        _check("randomTrips.py", True)
+        _check("randomTrips.py", True, section="sumo")
     else:
         _check("randomTrips.py", False,
-               f"Not found at {random_trips}. Reinstall SUMO with tools.")
+               f"Not found at {random_trips}. Reinstall SUMO with tools.", "sumo")
 
     # SUMO_HOME environment variable
     env_home = os.environ.get("SUMO_HOME", "")
     if env_home:
-        _check("SUMO_HOME env var", True, env_home)
+        _check("SUMO_HOME env var", True, env_home, "sumo")
     else:
         _warn("SUMO_HOME env var",
-              f"Not set. Set it: $env:SUMO_HOME = '{SUMO_HOME_DEFAULT}'")
+              f"Not set. Set it: $env:SUMO_HOME = '{SUMO_HOME_DEFAULT}'", "sumo")
 
     # PATH
     if str(sumo_home) in os.environ.get("PATH", "") or str(sumo_bin) in os.environ.get("PATH", ""):
-        _check("SUMO in PATH", True)
+        _check("SUMO in PATH", True, section="sumo")
     else:
-        _warn("SUMO in PATH", f"Neither {sumo_home} nor {sumo_bin} on PATH")
+        _warn("SUMO in PATH", f"Neither {sumo_home} nor {sumo_bin} on PATH", "sumo")
 
 
 # ---------------------------------------------------------------------------
@@ -295,10 +318,10 @@ def check_sumo() -> None:
 def check_traci() -> None:
     if _try_import("traci"):
         ver = _get_version("traci")
-        _check("traci import", True, f"traci {ver}")
+        _check("traci import", True, f"traci {ver}", "sumo")
     else:
         _check("traci import", False,
-               "traci not importable. Install: pip install traci")
+               "traci not importable. Ensure SUMO_HOME/tools is on PYTHONPATH", "sumo")
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +339,7 @@ def check_sumo_executables() -> None:
                                capture_output=True, text=True, timeout=10)
             ok = r.returncode == 0
             line = (r.stdout.strip() or r.stderr.strip())[:60]
-            _check(f"{name}.exe reachable", ok, line)
+            _check(f"{name}.exe reachable", ok, line, "sumo")
         except Exception:
             pass
 
@@ -344,7 +367,7 @@ def check_hardware() -> None:
     try:
         import psutil
     except ImportError:
-        _warn("Hardware checks", "psutil not installed; skipping hardware checks. Install: pip install psutil")
+        _warn("Hardware checks", "psutil not installed; skipping hardware checks", "hardware")
         return
 
     # RAM
@@ -352,7 +375,8 @@ def check_hardware() -> None:
     ram_gb = ram.total / (1024 ** 3)
     ok = ram_gb >= MIN_RAM_GB
     _check(f"RAM ({ram_gb:.1f} GB)", ok,
-           f"Minimum {MIN_RAM_GB:.0f} GB required" if not ok else "")
+           f"Minimum {MIN_RAM_GB:.0f} GB required" if not ok else "",
+           "hardware")
 
     # Disk
     try:
@@ -360,58 +384,73 @@ def check_hardware() -> None:
         free_gb = disk.free / (1024 ** 3)
         ok = free_gb >= MIN_DISK_GB
         _check(f"Disk space ({free_gb:.1f} GB free)", ok,
-               f"Minimum {MIN_DISK_GB:.0f} GB required" if not ok else "")
+               f"Minimum {MIN_DISK_GB:.0f} GB required" if not ok else "",
+               "hardware")
     except Exception:
-        _warn("Disk space", "Could not determine")
+        _warn("Disk space", "Could not determine", "hardware")
 
     # CPU
     cpu_count = psutil.cpu_count()
     cpu_logical = psutil.cpu_count(logical=True)
-    _check(f"CPU cores ({cpu_count} physical / {cpu_logical} logical)", True)
+    _check(f"CPU cores ({cpu_count} physical / {cpu_logical} logical)", True, section="hardware")
 
     # Architecture
     arch = platform.machine()
-    _check(f"Architecture ({arch})", arch in ("AMD64", "x86_64"), "")
+    _check(f"Architecture ({arch})", arch in ("AMD64", "x86_64"), "", "hardware")
 
 
 # ---------------------------------------------------------------------------
 #  Repository structure
 # ---------------------------------------------------------------------------
 def check_repo() -> None:
-    _check("Repository root", ROOT.exists() and ROOT.is_dir(), str(ROOT))
+    _check("Repository root", ROOT.exists() and ROOT.is_dir(), str(ROOT), "repo")
 
     for rel in REQUIRED_FILES:
         p = ROOT / rel
         exists = p.exists()
-        _check(f"File: {rel}", exists, "")
+        _check(f"File: {rel}", exists, "", "repo")
 
     # Outputs directory
     outputs = ROOT / "outputs"
     outputs.mkdir(parents=True, exist_ok=True)
-    _check("outputs/ directory", outputs.is_dir(), str(outputs))
+    _check("outputs/ directory", outputs.is_dir(), str(outputs), "repo")
 
     # Write permission
     test_file = outputs / ".write_test"
     try:
         test_file.write_text("test")
         test_file.unlink()
-        _check("Write permissions", True)
+        _check("Write permissions", True, section="repo")
     except PermissionError:
         _check("Write permissions", False,
-               f"Cannot write to {outputs}. Run as a user with write access.")
+               f"Cannot write to {outputs}. Run as a user with write access.", "repo")
 
     # Docs directory
     docs = ROOT / "docs"
     if docs.exists():
         doc_count = len(list(docs.rglob("*.md")))
-        _check(f"Documentation ({doc_count} .md files)", doc_count > 0)
+        _check(f"Documentation ({doc_count} .md files)", doc_count > 0, section="repo")
     else:
-        _check("Documentation (docs/)", False, "docs/ directory missing")
+        _check("Documentation (docs/)", False, "docs/ directory missing", "repo")
 
 
 # ---------------------------------------------------------------------------
 #  Report
 # ---------------------------------------------------------------------------
+def _print_section(title: str, section: str) -> int:
+    section_checks = [(l, s, m) for l, s, m, c in CHECKED if c == section]
+    if not section_checks:
+        return 0
+    print(f"  [{title}]")
+    for label, status, msg in section_checks:
+        icon = "+" if status == _PASS else ("!" if status == _WARN else "-")
+        left = label.ljust(54)
+        detail = f"  {msg}" if msg else ""
+        print(f"     {icon}  {left}{detail}")
+    print()
+    return sum(1 for _, s, _ in section_checks if s == _FAIL)
+
+
 def print_report() -> int:
     print()
     print("=" * 72)
@@ -419,11 +458,11 @@ def print_report() -> int:
     print("=" * 72)
     print()
 
-    max_label_len = max(len(l) for l, _, _ in CHECKED)
+    max_label_len = max(len(l) for l, _, _, _ in CHECKED)
     failures = 0
     warnings = 0
 
-    for label, status, msg in CHECKED:
+    for label, status, msg, section in CHECKED:
         padded = label.ljust(max_label_len + 2)
         if status == _PASS:
             print(f"  [{_PASS}]  {padded}{msg}")
@@ -436,36 +475,86 @@ def print_report() -> int:
 
     print()
     print("-" * 72)
-    print(f"  PASS:     {sum(1 for _, s, _ in CHECKED if s == _PASS)}")
+    print(f"  PASS:     {sum(1 for _, s, _, _ in CHECKED if s == _PASS)}")
     print(f"  WARNING:  {warnings}")
     print(f"  FAIL:     {failures}")
     print("-" * 72)
     print()
 
-    if failures > 0:
-        print("  Some checks FAILED. Review the report above for instructions.")
-        print()
-        return 1
+    # -- Categorized summary --
+    repo_fails = _print_section("REPOSITORY", "repo")
+    env_fails = _print_section("ENVIRONMENT", "env")
+    sumo_fails = _print_section("SUMO", "sumo")
+    deps_fails = _print_section("DEPENDENCIES", "deps")
+    hw_warns = sum(1 for _, s, _, c in CHECKED if c == "hardware" and s in (_WARN, _FAIL))
+    _print_section("HARDWARE", "hardware")
+    setup_fails = _print_section("SETUP", "setup")
 
+    # Determine which categories failed
+    infra_fails = repo_fails + sumo_fails + env_fails + hw_warns
+
+    if failures == 0:
+        print("  " + "=" * 62)
+        print("  THIS COMPUTER IS READY FOR THE COMPLETE THESIS EXPERIMENT")
+        print("  " + "=" * 62)
+        print()
+        print("  Next command:")
+        print()
+        sumo_home = os.environ.get("SUMO_HOME", str(SUMO_HOME_DEFAULT))
+        print(f'    $env:SUMO_HOME = "{sumo_home}"')
+        print(f'    $env:PYTHONPATH = "src"')
+        print(f'    python run_thesis.py')
+        print()
+        print("  Or step by step:")
+        print()
+        print("    python scripts/run_validation.py")
+        print("    python scripts/run_experiment.py --steps 300 --vehicles 300 --period 1.0 --seed 42")
+        print("    python scripts/generate_all_plots.py")
+        print()
+        return 0
+
+    # -- Failures present -- identify which areas --
     print("  " + "=" * 62)
-    print("  THIS COMPUTER IS READY FOR THE COMPLETE THESIS EXPERIMENT")
+    print("  SETUP SUMMARY")
     print("  " + "=" * 62)
     print()
-    print("  To start the full experiment, run:")
+
+    only_setup_remains = infra_fails == 0 and failures == setup_fails
+
+    if only_setup_remains:
+        print("  Repository and infrastructure:  ALL CHECKS PASSED")
+        print()
+        print("  This repository is valid and complete.")
+        print("  Only local environment setup remains.")
+        print()
+        print("  Install Python packages:")
+        print()
+        print("    .venv\\Scripts\\Activate.ps1")
+        print("    pip install -r requirements.txt")
+        print("    pip install -r requirements-dev.txt")
+        print()
+    else:
+        print(f"  Repository:      {'PASS' if repo_fails == 0 else f'{repo_fails} FAIL'}")
+        print(f"  Environment:     {'PASS' if env_fails == 0 else f'{env_fails} FAIL'}")
+        print(f"  SUMO:            {'PASS' if sumo_fails == 0 else f'{sumo_fails} FAIL'}")
+        print(f"  Setup:           {'PASS' if setup_fails == 0 else f'{setup_fails} FAIL'}")
+        print(f"  Hardware:        {'PASS' if hw_warns == 0 else f'{hw_warns} WARN'}")
+        print()
+
+    # -- Next commands --
+    print("  Next commands after resolving issues:")
     print()
     sumo_home = os.environ.get("SUMO_HOME", str(SUMO_HOME_DEFAULT))
     print(f'    $env:SUMO_HOME = "{sumo_home}"')
     print(f'    $env:PYTHONPATH = "src"')
-    print(f'    python run_thesis.py')
-    print()
-    print("  Or manually (step by step):")
-    print()
-    print("    python scripts/run_validation.py")
-    print("    python scripts/run_experiment.py --steps 300 --vehicles 300 --period 1.0 --seed 42")
-    print("    python scripts/generate_all_plots.py")
+    print(f'    python preflight.py')
     print()
 
-    return 0
+    check_report_path = ROOT / "preflight.py"
+    print(f"  Rerun this script to verify: python {check_report_path.name}")
+    print()
+
+    return 1 if failures > 0 else 0
 
 
 def main() -> int:
