@@ -40,6 +40,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
 _SUMO_HOME = os.environ.get("SUMO_HOME", "").strip()
 if _SUMO_HOME:
     _tools = os.path.join(_SUMO_HOME, "tools")
@@ -101,6 +106,8 @@ class StepMetrics:
     completed_trips: int = 0
     failed_trips: int = 0
     teleport_count: int = 0
+    travel_time_s: float = 0.0
+    reroute_latency_ms: float = 0.0
 
 
 @dataclass
@@ -320,6 +327,7 @@ def simulate_algorithm(algo_name: str, config: ExperimentConfig, output_dir: Pat
 
             avg_speed = total_speed / speed_count if speed_count else 0.0
 
+            step_reroute_latencies = []
             if s > 0 and s % config.reroute_interval == 0:
                 for vid in vehicles:
                     t0 = time.perf_counter()
@@ -346,8 +354,9 @@ def simulate_algorithm(algo_name: str, config: ExperimentConfig, output_dir: Pat
                         )
                         r = algo.compute_route(req, graph=graph)
                         t1 = time.perf_counter()
-                        reroute_latencies_ms = (t1 - t0) * 1000
-                        reroute_latencies.append(reroute_latencies_ms)
+                        lat = (t1 - t0) * 1000
+                        reroute_latencies.append(lat)
+                        step_reroute_latencies.append(lat)
 
                         if r.success and r.primary_route:
                             full_route = [current_edge] + [str(eid) for eid in r.primary_route.edge_sequence]
@@ -356,11 +365,13 @@ def simulate_algorithm(algo_name: str, config: ExperimentConfig, output_dir: Pat
                     except Exception:
                         pass
 
+            step_travel_times = []
             for vid in vehicles:
                 try:
                     pos_edge = conn.get_vehicle_position(vid)[2]
                     tt = conn.get_edge_travel_time(pos_edge)
                     travel_times.append(tt)
+                    step_travel_times.append(tt)
                 except Exception:
                     pass
 
@@ -375,6 +386,8 @@ def simulate_algorithm(algo_name: str, config: ExperimentConfig, output_dir: Pat
                 completed_trips=completed,
                 failed_trips=failed,
                 teleport_count=total_teleports,
+                travel_time_s=sum(step_travel_times) / len(step_travel_times) if step_travel_times else 0.0,
+                reroute_latency_ms=sum(step_reroute_latencies) / len(step_reroute_latencies) if step_reroute_latencies else 0.0,
             ))
 
     except Exception:
@@ -486,13 +499,14 @@ def write_step_csv(all_step_logs: dict[str, list[StepMetrics]], path: Path) -> N
         w.writerow(["algorithm", "step", "active_vehicles", "reroutes",
                      "emergency_events", "blocked_edges", "congestion_edges",
                      "avg_speed_mps", "completed_trips", "failed_trips",
-                     "teleport_count"])
+                     "teleport_count", "travel_time_s", "reroute_latency_ms"])
         for algo_name, steps in all_step_logs.items():
             for s in steps:
                 w.writerow([algo_name, s.step, s.active_vehicles, s.total_reroutes,
                            s.emergency_events, s.blocked_edges, s.congestion_edges,
                            f"{s.avg_speed_mps:.3f}", s.completed_trips, s.failed_trips,
-                           s.teleport_count])
+                           s.teleport_count, f"{s.travel_time_s:.3f}",
+                           f"{s.reroute_latency_ms:.3f}"])
 
 
 def write_metrics_csv(results: list[AlgorithmResult], path: Path) -> None:
@@ -663,6 +677,44 @@ def main() -> int:
     )
     (output_dir / "git_commit.txt").write_text(get_git_commit(), encoding="utf-8")
 
+    # Config snapshot
+    if yaml:
+        cfg_snapshot = {
+            "experiment_name": "E3-Hybrid Full Thesis Experiment",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "project_version": "0.1.0",
+            "sumo_version": env.get("sumo_version", "unknown"),
+            "python_version": sys.version.split()[0],
+            "network_file": str(NET_FILE),
+            "route_file": str(ROUTE_FILE),
+            "algorithms": list(cfg.algorithms),
+            "simulation": {
+                "steps": cfg.steps,
+                "vehicles": cfg.vehicles,
+                "departure_period_s": cfg.departure_period,
+                "seed": cfg.seed,
+                "reroute_interval_steps": cfg.reroute_interval,
+                "step_length_ms": 1000,
+                "emergency_count": cfg.emergency_count,
+            },
+            "benchmarks": {
+                "offline_requests": args.request_count,
+                "timeout_s": args.timeout,
+                "seed": cfg.seed + 1,
+            },
+            "reproducibility": {
+                "python_seed": cfg.seed,
+                "sumo_seed": cfg.seed,
+                "benchmark_seed": cfg.seed + 1,
+                "emergency_seed": cfg.seed + 2000,
+                "git_commit": get_git_commit(),
+            },
+        }
+        (output_dir / "config_snapshot.yaml").write_text(
+            yaml.dump(cfg_snapshot, default_flow_style=False), encoding="utf-8"
+        )
+        print(f"  [CONFIG] {output_dir / 'config_snapshot.yaml'}")
+
     # Phase 1: Online simulation
     print(f"\n{'---' * 72}")
     print("  Phase 1: Online SUMO simulation (per-algorithm)")
@@ -681,6 +733,35 @@ def main() -> int:
     step_logs = {r.algo: r.step_log for r in sim_results}
     write_step_csv(step_logs, output_dir / "simulation_log.csv")
     write_metrics_csv(sim_results, output_dir / "metrics_summary.csv")
+
+    # Timing log (per-algorithm per-step reroute latency)
+    timing_path = output_dir / "algorithm_timing.csv"
+    with timing_path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["algorithm", "step", "avg_reroute_latency_ms", "active_vehicles",
+                     "completed_trips", "travel_time_s"])
+        for r in sim_results:
+            for s in r.step_log:
+                w.writerow([r.algo, s.step, f"{s.reroute_latency_ms:.3f}",
+                           s.active_vehicles, s.completed_trips,
+                           f"{s.travel_time_s:.3f}"])
+    print(f"  [TIMING] {timing_path}")
+
+    # Emergency log
+    emerg_path = output_dir / "emergency_log.csv"
+    with emerg_path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["algorithm", "step", "emergency_events", "blocked_edges",
+                     "congestion_edges", "active_vehicles"])
+        for r in sim_results:
+            for s in r.step_log:
+                if s.emergency_events > 0:
+                    w.writerow([r.algo, s.step, s.emergency_events,
+                               s.blocked_edges, s.congestion_edges, s.active_vehicles])
+    if emerg_path.stat().st_size > 0:
+        print(f"  [EMERG] {emerg_path}")
+    else:
+        emerg_path.unlink(missing_ok=True)
 
     # Phase 2: Offline routing benchmarks
     print(f"\n{'---' * 72}")
