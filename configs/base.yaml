@@ -1,0 +1,17 @@
+experiment:
+  name: phase_1_infrastructure
+  seed: 42
+  output_dir: outputs/runs
+
+simulation:
+  backend: local
+
+logging:
+  level: INFO
+  log_dir: outputs/logs
+  max_bytes: 1048576
+  backup_count: 5
+
+documentation:
+  docs_dir: docs
+  require_research_docs: true

@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "e3hybrid"
+version = "0.1.0"
+description = "Research-quality simulator framework for E3-Hybrid swarm routing of electric vehicles under dynamic urban emergencies."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+  { name = "Sakib" }
+]
+dependencies = [
+  "PyYAML>=6.0.2",
+  "traci>=1.20.0",
+  "sumolib>=1.20.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pre-commit>=3.7",
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "mypy>=1.8",
+  "ruff>=0.5",
+  "types-PyYAML>=6.0.12"
+]
+
+[project.scripts]
+e3hybrid = "e3hybrid.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q --cov=src/e3hybrid --cov-report=term-missing --cov-report=html"
+markers = [
+    "sumo_integration: tests that require a real SUMO binary",
+    "determinism: tests verifying deterministic output across runs",
+    "acceptance: end-to-end acceptance tests spanning multiple subsystems",
+    "benchmark: performance and memory benchmark tests",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_configs = true
+
+[tool.coverage.run]
+branch = true
+source = ["src/e3hybrid"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

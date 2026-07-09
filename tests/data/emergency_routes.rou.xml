@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<routes>
+    <vType id="passenger" maxSpeed="13.0"/>
+    <vType id="emergency" maxSpeed="20.0" guiShape="emergency" color="255,0,0"/>
+
+    <vehicle id="p0" type="passenger" depart="0.0">
+        <route edges="A0A1 A1A2 A2A3 A3A4 A4B4 B4C4"/>
+    </vehicle>
+    <vehicle id="p1" type="passenger" depart="1.0">
+        <route edges="B0C0 C0C1 C1C2 C2C3 C3C4"/>
+    </vehicle>
+    <vehicle id="p2" type="passenger" depart="2.0">
+        <route edges="D0D1 D1D2 D2D3 D3D4 D4E4"/>
+    </vehicle>
+    <vehicle id="p3" type="passenger" depart="3.0">
+        <route edges="A1B1 B1C1 C1D1 D1E1"/>
+    </vehicle>
+    <vehicle id="p4" type="passenger" depart="4.0">
+        <route edges="E4E3 E3E2 E2E1 E1E0"/>
+    </vehicle>
+
+    <vehicle id="e0" type="emergency" depart="10.0">
+        <route edges="B2B3 B3B4 B4A4 A4A3 A3A2 A2A1"/>
+    </vehicle>
+    <vehicle id="e1" type="emergency" depart="20.0">
+        <route edges="C3D3 D3D2 D2D1 D1C1 C1B1"/>
+    </vehicle>
+
+    <vehicle id="p5" type="passenger" depart="30.0">
+        <route edges="A4A3 A3A2 A2B2 B2C2 C2D2"/>
+    </vehicle>
+    <vehicle id="p6" type="passenger" depart="31.0">
+        <route edges="E3E2 E2D2 D2D1 D1C1 C1C0"/>
+    </vehicle>
+    <vehicle id="p7" type="passenger" depart="32.0">
+        <route edges="A0B0 B0C0 C0D0 D0E0"/>
+    </vehicle>
+</routes>
