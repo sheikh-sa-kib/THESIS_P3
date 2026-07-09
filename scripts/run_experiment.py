@@ -131,28 +131,16 @@ def generate_routes(net_file: Path, route_file: Path, vehicles: int, period: flo
     sumo_home = os.environ.get("SUMO_HOME", "")
     random_trips = os.path.join(sumo_home, "tools", "randomTrips.py")
     end_time = vehicles * period
-    trips_file = route_file.with_suffix(".trips.xml")
 
     subprocess.run([
         sys.executable, random_trips,
         "-n", str(net_file),
-        "-r", str(trips_file),
+        "-r", str(route_file),
         "--end", str(end_time),
         "--period", str(period),
         "--seed", str(seed),
+        "--random-routing-factor", "1.0",
     ], check=True, capture_output=True)
-
-    subprocess.run([
-        "duarouter",
-        "-n", str(net_file),
-        "-s", str(trips_file),
-        "-o", str(route_file),
-        "--routing-threads", "2",
-        "--begin", "0", "--end", str(end_time),
-        "--no-warnings", "true",
-    ], check=True, capture_output=True)
-
-    trips_file.unlink(missing_ok=True)
 
 
 def collect_environment() -> dict[str, Any]:
@@ -342,7 +330,7 @@ def simulate_algorithm(algo_name: str, config: ExperimentConfig, output_dir: Pat
                         pos = conn.get_vehicle_position(vid)
                         _, _, current_edge = pos
 
-                        src = conn.get_edge_from_junction(current_edge) if current_edge else ""
+                        src = conn.get_edge_to_junction(current_edge) if current_edge else ""
                         dst = conn.get_edge_to_junction(route_edges[-1])
                         if not src or not dst:
                             continue
@@ -362,7 +350,8 @@ def simulate_algorithm(algo_name: str, config: ExperimentConfig, output_dir: Pat
                         reroute_latencies.append(reroute_latencies_ms)
 
                         if r.success and r.primary_route:
-                            conn.set_vehicle_route(vid, list(r.primary_route.edge_sequence))
+                            full_route = [current_edge] + [str(eid) for eid in r.primary_route.edge_sequence]
+                            conn.set_vehicle_route(vid, full_route)
                             total_reroutes += 1
                     except Exception:
                         pass
