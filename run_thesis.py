@@ -18,6 +18,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import platform
 import random
 import re
 import subprocess
@@ -476,6 +477,17 @@ def get_git_commit() -> str:
     return "unversioned"
 
 
+def _get_git_tag() -> str:
+    try:
+        r = subprocess.run(["git", "describe", "--tags", "--exact-match"],
+                           capture_output=True, text=True, cwd=_PROJECT_ROOT)
+        if r.returncode == 0:
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return "unversioned"
+
+
 def write_step_csv(all_step_logs: dict[str, list], path: Path) -> None:
     with path.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
@@ -672,6 +684,26 @@ def run_experiment(config: ExperimentConfig) -> Path | None:
         (output_dir / "config_snapshot.yaml").write_text(
             yaml.dump(cfg_snapshot, default_flow_style=False), encoding="utf-8"
         )
+
+    # Experiment manifest (machine-readable)
+    manifest = {
+        "git_commit": get_git_commit(),
+        "git_tag": _get_git_tag(),
+        "sumo_version": env.get("sumo_version", "unknown"),
+        "python_version": sys.version.split()[0],
+        "network": str(NET_FILE.name),
+        "vehicle_count": config.vehicles,
+        "simulation_steps": config.steps,
+        "algorithms": list(config.algorithms),
+        "seed": config.seed,
+        "date": datetime.now(timezone.utc).isoformat(),
+        "machine": platform.node() or os.environ.get("COMPUTERNAME", "unknown"),
+        "output_directory": str(output_dir),
+    }
+    (output_dir / "experiment_manifest.json").write_text(
+        json.dumps(manifest, indent=2), encoding="utf-8"
+    )
+    print(f"  [MANIFEST] {output_dir / 'experiment_manifest.json'}")
 
     # Simulate each algorithm
     t_exp_start = time.time()
