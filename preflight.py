@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import shutil
 import struct
 import subprocess
@@ -84,10 +85,26 @@ def _get_version(pkg: str) -> str:
     try:
         mod = __import__(pkg)
         v = getattr(mod, "__version__", None)
-        if v:
+        if v and v != "0.0.0":
             return v
         import importlib.metadata
         return importlib.metadata.version(pkg)
+    except Exception:
+        if pkg in ("traci", "sumolib"):
+            return _get_sumo_version()
+        return "unknown"
+
+
+def _get_sumo_version() -> str:
+    sumo_home = Path(os.environ.get("SUMO_HOME", SUMO_HOME_DEFAULT))
+    sumo_exe = sumo_home / "bin" / "sumo.exe"
+    if not sumo_exe.exists():
+        return "unknown"
+    try:
+        r = subprocess.run([str(sumo_exe), "--version"],
+                           capture_output=True, text=True, timeout=10)
+        m = re.search(r"\b(\d+\.\d+\.\d+)\b", r.stdout or r.stderr)
+        return m.group(1) if m else "unknown"
     except Exception:
         return "unknown"
 
@@ -177,9 +194,11 @@ def check_packages() -> None:
                 ver = _get_version(pkg)
                 _check(desc, True, f"{pkg} {ver}")
             else:
-                _warn(desc, f"{pkg} not installed. Install with: pip install {pkg}")
+                install_hint = "pip install pyyaml" if pkg == "yaml" else f"pip install {pkg}"
+                _warn(desc, f"{pkg} not installed. Install with: {install_hint}")
         else:
-            _check(desc, False, f"{pkg} not installed. Install with: pip install {pkg}")
+            install_hint = "pip install pyyaml" if pkg == "yaml" else f"pip install {pkg}"
+            _check(desc, False, f"{pkg} not installed. Install with: {install_hint}")
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +230,6 @@ def check_sumo() -> None:
             version_line = r.stdout.strip() or r.stderr.strip()
             _check("sumo.exe", True, version_line[:80])
             # Version check
-            import re
             m = re.search(r"(\d+)\.(\d+)\.(\d+)", version_line)
             if m:
                 ver = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
