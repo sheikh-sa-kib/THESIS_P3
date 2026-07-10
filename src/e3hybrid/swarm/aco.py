@@ -514,9 +514,11 @@ class AntColony:
         selection_stream: random.Random,
         roulette_stream: random.Random,
         cost_calculator: CompositeCostCalculator | None = None,
+        max_steps: int | None = None,
     ) -> list[Ant]:
         destination = request.destination_node
-        max_steps = self._config.forward_steps if self._config.forward_steps else len(list(graph.nodes())) * 2
+        if max_steps is None:
+            max_steps = self._config.forward_steps if self._config.forward_steps else len(list(graph.nodes())) * 2
 
         for ant in self._ants:
             ant.prev_node = None
@@ -705,10 +707,15 @@ class ACORouting:
     def __init__(self, config: ACSConfiguration | None = None) -> None:
         self._config = config or ACSConfiguration()
         self._colony: AntColony | None = None
+        self._profiling: dict[str, float] | None = None
 
     @property
     def name(self) -> str:
         return "aco"
+
+    @property
+    def profile(self) -> dict[str, float] | None:
+        return self._profiling
 
     def optimize(self, context: SwarmContext) -> SwarmResult:
         from e3hybrid.routing.candidate import RouteCandidate, SearchStatistics
@@ -736,8 +743,20 @@ class ACORouting:
                 return _failure_result("; ".join(cfg_errors))
             aco_config = self._config
 
+        # Profiling accumulators
+        prof: dict[str, float] = {
+            "visibility_build": 0.0,
+            "construct_routes": 0.0,
+            "evaluate": 0.0,
+            "pheromone_update": 0.0,
+            "iteration_overhead": 0.0,
+        }
+        self._profiling = prof
+
         # Build visibility (static) and pheromone matrices
+        t0 = time.perf_counter()
         visibility = VisibilityMatrix(graph, cost_calculator, aco_config)
+        prof["visibility_build"] = time.perf_counter() - t0
         edge_ids = {e.edge_id for e in graph.edges()}
         pheromones = PheromoneMatrix(aco_config, edge_ids)
 
@@ -761,23 +780,76 @@ class ACORouting:
         ant_count = swarm_config.population_size if swarm_config is not None else 20
         max_iters = swarm_config.max_iterations if swarm_config is not None else 100
 
+        # Resolve effective timeout: use the stricter of request.timeout_s and config.time_limit_s
+        timeout_s = request.timeout_s
+        if swarm_config is not None and swarm_config.time_limit_s > 0:
+            if timeout_s <= 0 or swarm_config.time_limit_s < timeout_s:
+                timeout_s = swarm_config.time_limit_s
+
+        # Resolve convergence/stall settings
+        stall_limit = swarm_config.stall_limit if swarm_config is not None else 10
+        conv_threshold = swarm_config.convergence_threshold if swarm_config is not None else 0.0
+        target_score = swarm_config.target_score if swarm_config is not None else 0.0
+
+        no_improvement_count = 0
+        term_reason = ""
+        node_count = len(list(graph.nodes())) if graph is not None else 0
+        max_steps = (
+            self._config.forward_steps
+            if self._config.forward_steps
+            else node_count * 2
+        )
+
         for iteration in range(max_iters):
+            # --- timeout check ---
+            elapsed = time.perf_counter() - start_time
+            if timeout_s > 0 and elapsed > timeout_s:
+                term_reason = f"Timeout reached ({timeout_s:.1f}s)"
+                break
+
+            # --- stall / convergence check ---
+            if target_score > 0 and global_best is not None and global_best.score <= target_score:
+                term_reason = f"Target score reached ({target_score})"
+                break
+
+            if stall_limit > 0 and no_improvement_count >= stall_limit:
+                term_reason = (
+                    f"Stall limit reached — no improvement for "
+                    f"{no_improvement_count} iterations"
+                )
+                break
+
+            t0 = time.perf_counter()
             colony.initialize_population(ant_count, request.source_node)
 
             colony.construct_routes(
                 request, pheromones, visibility, graph,
                 sel_stream, roulette_stream,
                 cost_calculator=cost_calculator,
+                max_steps=max_steps,
             )
+            prof["construct_routes"] += time.perf_counter() - t0
 
+            t0 = time.perf_counter()
             iter_best, iter_worst, avg_cost = colony.evaluate_population()
             diversity = colony.compute_diversity()
+            prof["evaluate"] += time.perf_counter() - t0
+
+            prev_best_score = global_best.score if global_best else float("inf")
 
             if iter_best is not None:
                 if global_best is None or iter_best.score < global_best.score:
                     global_best = iter_best
                     global_best_iteration = iteration
 
+            # Track stall count
+            current_best = global_best.score if global_best else float("inf")
+            if conv_threshold > 0 and abs(current_best - prev_best_score) < conv_threshold:
+                no_improvement_count += 1
+            elif current_best < prev_best_score:
+                no_improvement_count = 0
+
+            t0 = time.perf_counter()
             # Global update on best-so-far
             if global_best is not None:
                 best_edges = list(global_best.solution.edge_sequence)
@@ -791,9 +863,10 @@ class ACORouting:
                     elite_costs = [a.total_cost for a in elite if a.total_cost > 0]
                     if elite_edges:
                         colony._updater.global_update_elite(pheromones, elite_edges, elite_costs)
+            prof["pheromone_update"] += time.perf_counter() - t0
 
+            t0 = time.perf_counter()
             # Record per-iteration stats
-            current_best = global_best.score if global_best else float("inf")
             iter_stats = _build_iter_stats(
                 iteration=iteration,
                 best_score=current_best,
@@ -805,6 +878,7 @@ class ACORouting:
             iteration_history.append(iter_stats)
             diversity_history.append(diversity)
             score_history.append(current_best)
+            prof["iteration_overhead"] += time.perf_counter() - t0
 
         total_time = time.perf_counter() - start_time
 
@@ -852,7 +926,8 @@ class ACORouting:
                 conv_iter = i
                 break
 
-        term_reason = f"Maximum iterations reached ({max_iters})"
+        if not term_reason:
+            term_reason = f"Maximum iterations reached ({max_iters})"
         final_best = global_best.score if global_best else float("inf")
 
         statistics = SwarmStatistics(
@@ -868,6 +943,13 @@ class ACORouting:
             score_history=tuple(score_history),
             termination_reason=term_reason,
         )
+
+        # Log profiling breakdown
+        if total_time > 0.1:
+            for key in ("visibility_build", "construct_routes", "evaluate",
+                        "pheromone_update", "iteration_overhead"):
+                pct = (prof[key] / total_time) * 100
+                prof[key] = pct
 
         return SwarmResult(
             best_solution=candidates_list[0] if candidates_list else None,
