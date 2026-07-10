@@ -109,7 +109,7 @@ class SumoReroutingManager:
             battery_state={},
             max_candidates=1,
             timeout_s=30.0,
-            metadata={"reroute": True},
+            metadata={"reroute": True, "source_edge_id": current_edge_id},
         )
 
         result = self._algorithm.compute_route(request, graph=graph_snapshot)

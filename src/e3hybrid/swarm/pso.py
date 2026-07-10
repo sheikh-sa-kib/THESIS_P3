@@ -250,6 +250,7 @@ class PSORouting:
         self._cost_calculator: CompositeCostCalculator | None = None
         self._source: NodeId | None = None
         self._destination: NodeId | None = None
+        self._source_edge_id: EdgeId | None = None
 
     @property
     def name(self) -> str:
@@ -275,6 +276,11 @@ class PSORouting:
         self._cost_calculator = context.cost_calculator
         self._source = context.routing_request.source_node
         self._destination = context.routing_request.destination_node
+        self._source_edge_id: EdgeId | None = (
+            EdgeId(str(context.routing_request.metadata["source_edge_id"]))
+            if "source_edge_id" in context.routing_request.metadata
+            else None
+        )
         config = context.config
 
         # Build config
@@ -535,6 +541,7 @@ class PSORouting:
         stream: random.Random,
     ) -> list[EdgeId]:
         current: NodeId = self._source
+        current_edge: Edge | None = None
         prev: NodeId | None = None
         route: list[EdgeId] = []
         eps = self._config.epsilon
@@ -544,7 +551,15 @@ class PSORouting:
             if current == self._destination:
                 break
 
-            outgoing = self._graph.outgoing_edges(current)
+            # Use lane-level successors if we have a previous edge,
+            # or a source edge was provided (rerouting), otherwise fall
+            # back to node-level outgoing edges (first step).
+            if current_edge is not None:
+                outgoing = self._graph.get_successors(current_edge.edge_id)
+            elif current_edge is None and self._source_edge_id is not None:
+                outgoing = self._graph.get_successors(self._source_edge_id)
+            else:
+                outgoing = self._graph.outgoing_edges(current)
             candidates: list[Edge] = []
             for e in outgoing:
                 ec = self._edge_total_cost(e)
@@ -589,6 +604,7 @@ class PSORouting:
             route.append(chosen.edge_id)
             prev = current
             current = chosen.target
+            current_edge = chosen
 
         return route
 

@@ -103,4 +103,25 @@ class SumoNetworkImporter:
             )
             graph.add_edge(edge)
 
+        # 3. Build lane-level successor map
+        all_edge_ids = list(graph.edges())
+        for edge in all_edge_ids:
+            eid_str = str(edge.edge_id)
+            try:
+                lane_count = conn.get_edge_lane_count(eid_str)
+            except Exception:
+                continue
+            successors: set[EdgeId] = set()
+            for li in range(lane_count):
+                lane_id = conn.get_lane_id(eid_str, li)
+                links = conn.get_lane_links(lane_id)
+                for link in links:
+                    target_lane = str(link[0])
+                    # Extract edge ID from lane ID (strip trailing _lane_index)
+                    target_edge = "_".join(target_lane.split("_")[:-1])
+                    if target_edge.startswith(":") or not graph.has_edge(EdgeId(target_edge)):
+                        continue
+                    successors.add(EdgeId(target_edge))
+            graph.set_successors(edge.edge_id, list(successors))
+
         return graph

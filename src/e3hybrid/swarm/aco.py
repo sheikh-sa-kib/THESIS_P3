@@ -348,6 +348,7 @@ class Ant:
     current_node: NodeId
     visited_nodes: set[NodeId] = field(default_factory=set)
     prev_node: NodeId | None = None
+    prev_edge: EdgeId | None = None
     node_sequence: list[NodeId] = field(default_factory=list)
     edge_sequence: list[EdgeId] = field(default_factory=list)
     total_cost: float = 0.0
@@ -359,6 +360,7 @@ class Ant:
         self.current_node = start_node
         self.visited_nodes = {start_node}
         self.prev_node = None
+        self.prev_edge = None
         self.node_sequence = [start_node]
         self.edge_sequence = []
         self.total_cost = 0.0
@@ -372,6 +374,7 @@ class Ant:
             current_node=start_node,
             visited_nodes={start_node},
             prev_node=None,
+            prev_edge=None,
             node_sequence=[start_node],
         )
 
@@ -517,21 +520,35 @@ class AntColony:
 
         for ant in self._ants:
             ant.prev_node = None
+            ant.prev_edge = None
             for _ in range(max_steps):
                 if ant.current_node == destination:
                     ant.is_complete = True
                     break
 
-                # Gather visible candidate edges — avoid immediate back-track
+                # Gather visible candidate edges using lane-level successors
                 candidates: list[EdgeId] = []
-                for eid in visibility.get_neighbours(ant.current_node):
-                    try:
-                        edge = graph.get_edge(eid)
-                    except Exception:
-                        continue
-                    if ant.prev_node is not None and edge.target == ant.prev_node:
-                        continue
-                    candidates.append(eid)
+                if ant.prev_edge is not None:
+                    for edge in graph.get_successors(ant.prev_edge):
+                        if ant.prev_node is not None and edge.target == ant.prev_node:
+                            continue
+                        candidates.append(edge.edge_id)
+                elif ("source_edge_id" in request.metadata
+                      and graph.has_successors(EdgeId(str(request.metadata["source_edge_id"])))):
+                    src_eid = EdgeId(str(request.metadata["source_edge_id"]))
+                    for edge in graph.get_successors(src_eid):
+                        if ant.prev_node is not None and edge.target == ant.prev_node:
+                            continue
+                        candidates.append(edge.edge_id)
+                else:
+                    for eid in visibility.get_neighbours(ant.current_node):
+                        try:
+                            edge = graph.get_edge(eid)
+                        except Exception:
+                            continue
+                        if ant.prev_node is not None and edge.target == ant.prev_node:
+                            continue
+                        candidates.append(eid)
                 # Prefer non-dead-end targets
                 if len(candidates) > 1:
                     alive = [c for c in candidates if _not_deadend(c, graph, destination)]
@@ -553,6 +570,7 @@ class AntColony:
                 ant.edge_sequence.append(next_edge)
                 ant.node_sequence.append(edge.target)
                 ant.prev_node = ant.current_node
+                ant.prev_edge = next_edge
                 ant.current_node = edge.target
 
             # Cost computation — use CompositeCostCalculator for consistency

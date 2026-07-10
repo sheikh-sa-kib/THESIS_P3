@@ -257,6 +257,7 @@ class BCORouting:
         self._cost_calculator: CompositeCostCalculator | None = None
         self._source: NodeId | None = None
         self._destination: NodeId | None = None
+        self._source_edge_id: EdgeId | None = None
 
     @property
     def name(self) -> str:
@@ -282,6 +283,11 @@ class BCORouting:
         self._cost_calculator = context.cost_calculator
         self._source = context.routing_request.source_node
         self._destination = context.routing_request.destination_node
+        self._source_edge_id: EdgeId | None = (
+            EdgeId(str(context.routing_request.metadata["source_edge_id"]))
+            if "source_edge_id" in context.routing_request.metadata
+            else None
+        )
         config = context.config
 
         # Build config
@@ -442,12 +448,18 @@ class BCORouting:
             bee.state = BeeStatus.CONSTRUCTING
 
             current: NodeId = self._source
+            current_edge: Edge | None = None
             prev_node: NodeId | None = None
             route_edges: list[EdgeId] = []
             total_cost: float = 0.0
 
             for _ in range(self._config.forward_steps):
-                outgoing = self._graph.outgoing_edges(current)
+                if current_edge is not None:
+                    outgoing = self._graph.get_successors(current_edge.edge_id)
+                elif current_edge is None and self._source_edge_id is not None:
+                    outgoing = self._graph.get_successors(self._source_edge_id)
+                else:
+                    outgoing = self._graph.outgoing_edges(current)
                 feasible: list[Edge] = []
                 for e in outgoing:
                     ec = self._edge_total_cost(e)
@@ -484,6 +496,7 @@ class BCORouting:
                 total_cost += edge_cost
                 prev_node = current
                 current = chosen.target
+                current_edge = chosen
 
                 if current == self._destination:
                     break

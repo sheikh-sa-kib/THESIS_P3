@@ -178,8 +178,25 @@ class DijkstraRouting:
             if current_node == request.destination_node:
                 break
 
+            # Use lane-level successors when arriving via a known edge.
+            # For the source node, check if the request specifies a source edge
+            # (used during rerouting where the vehicle is already on an edge).
+            incoming_edge_id = predecessor_edges.get(current_node)
+            if incoming_edge_id is not None and graph.has_successors(incoming_edge_id):
+                outgoing_iter = graph.get_successors(incoming_edge_id)
+            elif (incoming_edge_id is None
+                  and current_node == request.source_node
+                  and "source_edge_id" in request.metadata):
+                src_eid = EdgeId(str(request.metadata["source_edge_id"]))
+                if graph.has_successors(src_eid):
+                    outgoing_iter = graph.get_successors(src_eid)
+                else:
+                    outgoing_iter = graph.outgoing_edges(current_node)
+            else:
+                outgoing_iter = graph.outgoing_edges(current_node)
+
             # Explore neighbors
-            for edge in graph.outgoing_edges(current_node):
+            for edge in outgoing_iter:
                 edges_explored += 1
 
                 # Skip blocked edges

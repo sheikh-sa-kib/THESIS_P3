@@ -172,6 +172,25 @@ class SumoTraciConnection:
         return (float(pos[0]), float(pos[1]))
 
     # ------------------------------------------------------------------
+    # Lane queries (for building lane-level connectivity)
+    # ------------------------------------------------------------------
+
+    def get_lane_id(self, edge_id: str, lane_index: int) -> str:
+        """Return the full lane ID for a given edge and lane index."""
+        return f"{edge_id}_{lane_index}"
+
+    def get_lane_links(self, lane_id: str) -> list[tuple]:
+        """Return lane-to-lane connections from a given lane.
+
+        Each element is a tuple like (target_lane_id, via, ...).
+        The first element is the target lane ID.
+        """
+        try:
+            return list(self._mod.lane.getLinks(lane_id))
+        except Exception:
+            return []
+
+    # ------------------------------------------------------------------
     # Vehicle queries
     # ------------------------------------------------------------------
 

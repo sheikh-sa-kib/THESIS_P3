@@ -86,6 +86,10 @@ class DirectedGraph:
     )
     _graph_metadata: dict[str, object] = field(default_factory=dict)
 
+    # Lane-level successors: edge_id → list of successor edge_ids.
+    # Populated by SumoNetworkImporter.import_graph().
+    _edge_successors: dict[EdgeId, list[EdgeId]] = field(default_factory=dict)
+
     # ------------------------------------------------------------------
     # Mutation
     # ------------------------------------------------------------------
@@ -204,6 +208,39 @@ class DirectedGraph:
         """Return target node IDs reachable via outgoing edges from ``node_id``."""
 
         return tuple(edge.target for edge in self.outgoing_edges(node_id))
+
+    # ------------------------------------------------------------------
+    # Lane-level successors (edge → list of lane-valid successor edges)
+    # ------------------------------------------------------------------
+
+    def set_successors(self, edge_id: EdgeId, successor_ids: list[EdgeId]) -> None:
+        """Set lane-valid successor edge IDs for a given edge.
+
+        Populated by ``SumoNetworkImporter`` based on SUMO lane-level
+        connections.  An empty list means the edge terminates at a
+        junction from which no further edge is reachable via lane
+        connections.
+        """
+        self._edge_successors[edge_id] = list(successor_ids)
+
+    def get_successors(self, edge_id: EdgeId) -> tuple[Edge, ...]:
+        """Return lane-valid successor edges for a given edge.
+
+        Falls back to node-level outgoing edges if no lane-level
+        successor info has been registered for this edge.
+        """
+        if edge_id in self._edge_successors:
+            return tuple(
+                self._edges[sid] for sid in self._edge_successors[edge_id]
+                if sid in self._edges
+            )
+        # Fallback: node-level adjacency
+        edge = self.get_edge(edge_id)
+        return self.outgoing_edges(edge.target)
+
+    def has_successors(self, edge_id: EdgeId) -> bool:
+        """Return True if lane-level successor info exists for this edge."""
+        return edge_id in self._edge_successors
 
     # ------------------------------------------------------------------
     # Graph-level metadata

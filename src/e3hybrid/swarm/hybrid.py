@@ -365,6 +365,7 @@ class E3HybridRouting:
         self._cost_calculator: CompositeCostCalculator | None = None
         self._source: NodeId | None = None
         self._destination: NodeId | None = None
+        self._source_edge_id: EdgeId | None = None
         self._global_best_cost: float = float("inf")
         self._global_best_route: list[EdgeId] = []
         self._templates: list[list[EdgeId]] = []
@@ -399,6 +400,11 @@ class E3HybridRouting:
         self._cost_calculator = context.cost_calculator
         self._source = context.routing_request.source_node
         self._destination = context.routing_request.destination_node
+        self._source_edge_id: EdgeId | None = (
+            EdgeId(str(context.routing_request.metadata["source_edge_id"]))
+            if "source_edge_id" in context.routing_request.metadata
+            else None
+        )
         swarm_config = context.config
 
         # 2. Build config
@@ -655,6 +661,7 @@ class E3HybridRouting:
         stream: Any | None,  # random.Random
     ) -> list[EdgeId]:
         current = source
+        current_edge: Edge | None = None
         prev: NodeId | None = None
         route: list[EdgeId] = []
 
@@ -662,9 +669,15 @@ class E3HybridRouting:
             if current == destination:
                 break
 
-            # Gather candidates (Eq. 1)
+            # Gather candidates using lane-level successors (Eq. 1)
             candidates: list[Edge] = []
-            for edge in self._graph.outgoing_edges(current):
+            if current_edge is not None:
+                outgoing = self._graph.get_successors(current_edge.edge_id)
+            elif current_edge is None and self._source_edge_id is not None:
+                outgoing = self._graph.get_successors(self._source_edge_id)
+            else:
+                outgoing = self._graph.outgoing_edges(current)
+            for edge in outgoing:
                 ec = self._edge_total_cost(edge)
                 if ec < float("inf"):
                     candidates.append(edge)
@@ -722,6 +735,7 @@ class E3HybridRouting:
             route.append(chosen.edge_id)
             prev = current
             current = chosen.target
+            current_edge = chosen
 
         return route
 
