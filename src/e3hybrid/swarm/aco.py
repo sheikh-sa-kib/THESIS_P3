@@ -529,19 +529,19 @@ class AntColony:
                     break
 
                 # Gather visible candidate edges using lane-level successors
-                candidates: list[EdgeId] = []
+                candidate_edges: list[Edge] = []
                 if ant.prev_edge is not None:
                     for edge in graph.get_successors(ant.prev_edge):
                         if ant.prev_node is not None and edge.target == ant.prev_node:
                             continue
-                        candidates.append(edge.edge_id)
+                        candidate_edges.append(edge)
                 elif ("source_edge_id" in request.metadata
                       and graph.has_successors(EdgeId(str(request.metadata["source_edge_id"])))):
                     src_eid = EdgeId(str(request.metadata["source_edge_id"]))
                     for edge in graph.get_successors(src_eid):
                         if ant.prev_node is not None and edge.target == ant.prev_node:
                             continue
-                        candidates.append(edge.edge_id)
+                        candidate_edges.append(edge)
                 else:
                     for eid in visibility.get_neighbours(ant.current_node):
                         try:
@@ -550,13 +550,14 @@ class AntColony:
                             continue
                         if ant.prev_node is not None and edge.target == ant.prev_node:
                             continue
-                        candidates.append(eid)
+                        candidate_edges.append(edge)
                 # Prefer non-dead-end targets
-                if len(candidates) > 1:
-                    alive = [c for c in candidates if _not_deadend(c, graph, destination)]
+                if len(candidate_edges) > 1:
+                    alive = [e for e in candidate_edges if _is_edge_alive(e, graph, destination)]
                     if alive:
-                        candidates = alive
+                        candidate_edges = alive
 
+                candidates = [e.edge_id for e in candidate_edges]
                 next_edge = self._transition.select(
                     candidates, pheromones, visibility,
                     selection_stream, roulette_stream,
@@ -649,12 +650,8 @@ class AntColony:
 # Module-level helpers
 # -------------------------------------------------------------------------
 
-def _not_deadend(eid: EdgeId, graph: DirectedGraph, dest: NodeId) -> bool:
-    try:
-        e = graph.get_edge(eid)
-        return e.target == dest or len(list(graph.outgoing_edges(e.target))) > 0
-    except Exception:
-        return False
+def _is_edge_alive(edge: Edge, graph: DirectedGraph, dest: NodeId) -> bool:
+    return edge.target == dest or len(list(graph.outgoing_edges(edge.target))) > 0
 
 def _compute_edge_cost_sequence(edge_ids: list[EdgeId], graph: DirectedGraph) -> float:
     total = 0.0
