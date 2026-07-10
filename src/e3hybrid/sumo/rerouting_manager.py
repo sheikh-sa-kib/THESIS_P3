@@ -359,6 +359,9 @@ class SumoReroutingManager:
             except Exception:
                 continue
 
+            if not current_edge:
+                continue
+
             new_route = self.compute_reroute(
                 veh_id, current_edge, dest, graph_snapshot,
                 known_dest_edge=known_dest,

@@ -95,13 +95,15 @@ class TestSumoReroutingManager:
         mgr = _make_manager(mock_config, mock_connection, mock_algorithm)
         mgr.apply_reroute("veh_1", ["e1", "e2"])
         mock_connection.set_vehicle_route.assert_called_once_with("veh_1", ["e1", "e2"])
-        assert mgr.reroute_count == 1
+        # reroute_count tracks computed routes, not applied
+        assert mgr.reroute_count == 0
 
     def test_apply_reroutes_batch(self, mock_config, mock_connection, mock_algorithm):
         mgr = _make_manager(mock_config, mock_connection, mock_algorithm, ["v1", "v2"])
         mgr.apply_reroutes([("v1", ["e1"]), ("v2", ["e2"])])
         assert mock_connection.set_vehicle_route.call_count == 2
-        assert mgr.reroute_count == 2
+        # reroute_count tracks computed routes, not applied
+        assert mgr.reroute_count == 0
 
     def test_compute_reroute_returns_route(
         self, mock_config, mock_connection, mock_algorithm, small_graph

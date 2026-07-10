@@ -338,15 +338,27 @@ def simulate_algorithm(
                             battery_state={},
                             max_candidates=1,
                             timeout_s=30.0,
+                            metadata={"source_edge_id": current_edge},
                         )
                         r = algo.compute_route(req, graph=graph)
                         lat = (time.perf_counter() - t0) * 1000
                         reroute_latencies.append(lat)
                         step_reroute_latencies.append(lat)
                         if r.success and r.primary_route:
-                            full_route = [current_edge] + [str(eid) for eid in r.primary_route.edge_sequence]
-                            conn.set_vehicle_route(vid, full_route)
-                            total_reroutes += 1
+                            algo_edges = [str(eid) for eid in r.primary_route.edge_sequence]
+                            full_route = [current_edge] + algo_edges
+                            # Validate lane-level connections before applying
+                            valid = True
+                            for i in range(len(full_route) - 1):
+                                e1, e2 = full_route[i], full_route[i + 1]
+                                if e1.startswith(":") or e2.startswith(":"):
+                                    continue
+                                if not conn.has_lane_connection(e1, e2):
+                                    valid = False
+                                    break
+                            if valid:
+                                conn.set_vehicle_route(vid, full_route)
+                                total_reroutes += 1
                     except Exception:
                         pass
 
