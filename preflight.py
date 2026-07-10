@@ -23,6 +23,7 @@ from pathlib import Path
 _PASS = "PASS"
 _WARN = "WARNING"
 _FAIL = "FAIL"
+_OPT = "OPTIONAL"
 
 _MAX_LABEL = 60
 
@@ -75,6 +76,11 @@ def _check(label: str, ok: bool, msg: str = "", section: str = "env") -> str:
 def _warn(label: str, msg: str, section: str = "env") -> str:
     CHECKED.append((label, _WARN, msg, section))
     return _WARN
+
+
+def _opt(label: str, msg: str, section: str = "env") -> str:
+    CHECKED.append((label, _OPT, msg, section))
+    return _OPT
 
 
 def _try_import(mod: str) -> bool:
@@ -179,9 +185,10 @@ def check_venv() -> None:
     in_venv = hasattr(sys, "real_prefix") or (
         hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix
     )
-    if venv_python.exists():
-        extra = " (active)" if in_venv else " (run `.venv\\Scripts\\Activate.ps1` to activate)"
-        _warn("Virtual environment .venv", f"Exists{extra}", "setup")
+    if venv_python.exists() and in_venv:
+        _check("Virtual environment .venv", True, "Active", "setup")
+    elif venv_python.exists():
+        _warn("Virtual environment .venv", "Exists but not active (run `.venv\\Scripts\\Activate.ps1`)", "setup")
     else:
         _check("Virtual environment .venv", False,
                "Not found. Run: python -m venv .venv && .venv\\Scripts\\Activate.ps1",
@@ -217,7 +224,7 @@ def check_packages() -> None:
             ver = _get_version(pkg)
             _check(desc, True, f"{pkg} {ver}", "setup")
         else:
-            _warn(desc, f"{pkg} not installed", "setup")
+            _opt(desc, f"{pkg} not installed (optional for development)", "setup")
 
 
 # ---------------------------------------------------------------------------
@@ -353,11 +360,11 @@ def check_java() -> None:
         try:
             r = subprocess.run([java, "-version"], capture_output=True, text=True, timeout=10)
             ver = (r.stderr or r.stdout).strip().split("\n")[0]
-            _warn("Java", f"Found but not required: {ver}")
+            _opt("Java", f"Found but not required: {ver}")
         except Exception:
-            _warn("Java", "Found but not required")
+            _opt("Java", "Found but not required")
     else:
-        _warn("Java", "Not found. Java is NOT required for this experiment.")
+        _opt("Java", "Not found. Java is NOT required for this experiment.")
 
 
 # ---------------------------------------------------------------------------
@@ -443,7 +450,7 @@ def _print_section(title: str, section: str) -> int:
         return 0
     print(f"  [{title}]")
     for label, status, msg in section_checks:
-        icon = "+" if status == _PASS else ("!" if status == _WARN else "-")
+        icon = "+" if status == _PASS else ("!" if status == _WARN else ("~" if status == _OPT else "-"))
         left = label.ljust(54)
         detail = f"  {msg}" if msg else ""
         print(f"     {icon}  {left}{detail}")
@@ -451,16 +458,32 @@ def _print_section(title: str, section: str) -> int:
     return sum(1 for _, s, _ in section_checks if s == _FAIL)
 
 
+def _estimate_runtime() -> str:
+    try:
+        import psutil
+        cpu = psutil.cpu_count()
+        ram = psutil.virtual_memory().total / (1024 ** 3)
+        if cpu >= 8 and ram >= 16:
+            return "~25-35 minutes (6 algorithms, 300 steps, 300 vehicles)"
+        elif cpu >= 4 and ram >= 8:
+            return "~45-60 minutes (6 algorithms, 300 steps, 300 vehicles)"
+        else:
+            return "~60-90 minutes (6 algorithms, 300 steps, 300 vehicles)"
+    except Exception:
+        return "~45-90 minutes depending on hardware"
+
+
 def print_report() -> int:
     print()
     print("=" * 72)
-    print("  E3-HYBRID — ENVIRONMENT PREFLIGHT REPORT")
+    print("  E3-HYBRID - ENVIRONMENT PREFLIGHT REPORT")
     print("=" * 72)
     print()
 
     max_label_len = max(len(l) for l, _, _, _ in CHECKED)
     failures = 0
     warnings = 0
+    optionals = 0
 
     for label, status, msg, section in CHECKED:
         padded = label.ljust(max_label_len + 2)
@@ -469,15 +492,20 @@ def print_report() -> int:
         elif status == _WARN:
             print(f"  [{_WARN}]  {padded}{msg}")
             warnings += 1
+        elif status == _OPT:
+            print(f"  [{_OPT}]  {padded}{msg}")
+            optionals += 1
         else:
             print(f"  [{_FAIL}]  {padded}{msg}")
             failures += 1
 
     print()
     print("-" * 72)
-    print(f"  PASS:     {sum(1 for _, s, _, _ in CHECKED if s == _PASS)}")
-    print(f"  WARNING:  {warnings}")
-    print(f"  FAIL:     {failures}")
+    print(f"  PASS:      {sum(1 for _, s, _, _ in CHECKED if s == _PASS)}")
+    print(f"  WARNING:   {warnings}")
+    if optionals:
+        print(f"  OPTIONAL:  {optionals}")
+    print(f"  FAIL:      {failures}")
     print("-" * 72)
     print()
 
@@ -485,7 +513,6 @@ def print_report() -> int:
     repo_fails = _print_section("REPOSITORY", "repo")
     env_fails = _print_section("ENVIRONMENT", "env")
     sumo_fails = _print_section("SUMO", "sumo")
-    deps_fails = _print_section("DEPENDENCIES", "deps")
     hw_warns = sum(1 for _, s, _, c in CHECKED if c == "hardware" and s in (_WARN, _FAIL))
     _print_section("HARDWARE", "hardware")
     setup_fails = _print_section("SETUP", "setup")
@@ -494,22 +521,21 @@ def print_report() -> int:
     infra_fails = repo_fails + sumo_fails + env_fails + hw_warns
 
     if failures == 0:
+        runtime_est = _estimate_runtime()
         print("  " + "=" * 62)
         print("  THIS COMPUTER IS READY FOR THE COMPLETE THESIS EXPERIMENT")
         print("  " + "=" * 62)
         print()
-        print("  Next command:")
+        print(f"  Estimated runtime:  {runtime_est}")
+        print()
+        print("  To run the full experiment, execute:")
         print()
         sumo_home = os.environ.get("SUMO_HOME", str(SUMO_HOME_DEFAULT))
         print(f'    $env:SUMO_HOME = "{sumo_home}"')
         print(f'    $env:PYTHONPATH = "src"')
         print(f'    python run_thesis.py')
         print()
-        print("  Or step by step:")
-        print()
-        print("    python scripts/run_validation.py")
-        print("    python scripts/run_experiment.py --steps 300 --vehicles 300 --period 1.0 --seed 42")
-        print("    python scripts/generate_all_plots.py")
+        print("  (This runs preflight -> validation -> experiment -> plots -> summary.)")
         print()
         return 0
 
@@ -533,6 +559,12 @@ def print_report() -> int:
         print("    pip install -r requirements.txt")
         print("    pip install -r requirements-dev.txt")
         print()
+        runtime_est = _estimate_runtime()
+        print(f"  After setup, estimated runtime:  {runtime_est}")
+        print()
+        print("  Then run:")
+        print(f'    python run_thesis.py')
+        print()
     else:
         print(f"  Repository:      {'PASS' if repo_fails == 0 else f'{repo_fails} FAIL'}")
         print(f"  Environment:     {'PASS' if env_fails == 0 else f'{env_fails} FAIL'}")
@@ -542,7 +574,7 @@ def print_report() -> int:
         print()
 
     # -- Next commands --
-    print("  Next commands after resolving issues:")
+    print("  Next steps after resolving issues:")
     print()
     sumo_home = os.environ.get("SUMO_HOME", str(SUMO_HOME_DEFAULT))
     print(f'    $env:SUMO_HOME = "{sumo_home}"')

@@ -640,6 +640,20 @@ def run_experiment(config: ExperimentConfig) -> Path | None:
 
     print(f"  Output: {output_dir}")
     print()
+    print("  Generated artifacts after completion:")
+    print(f"    metrics_summary.csv     — Per-algorithm metrics table")
+    print(f"    simulation_log.csv      — Per-step simulation log")
+    print(f"    emergency_log.csv       — Emergency event timeline")
+    print(f"    algorithm_timing.csv    — Algorithm execution timing")
+    print(f"    routing_log.csv         — Offline routing benchmarks")
+    print(f"    config_snapshot.yaml    — Full experiment configuration")
+    print(f"    experiment_manifest.json— Machine-readable experiment record")
+    print(f"    git_commit.txt          — Pinned repository commit")
+    print(f"    environment.json        — Python/SUMO/OS environment")
+    print(f"    network_metadata.json   — Network graph properties")
+    print(f"    plots/png/              — 34 publication-ready figures")
+    print(f"    plots/data/             — Plot source data CSVs")
+    print()
 
     # Environment + git
     env = collect_environment()
@@ -822,6 +836,45 @@ def run_plot_generation() -> int:
 # ===================================================================
 #  SECTION 5 – Final summary
 # ===================================================================
+def _get_git_tag_repr() -> str:
+    try:
+        r = subprocess.run(["git", "describe", "--tags", "--exact-match"],
+                           capture_output=True, text=True, cwd=_PROJECT_ROOT)
+        if r.returncode == 0:
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return "unversioned"
+
+
+def _categorize_artifacts(output_dir: Path) -> list[str]:
+    artifacts = []
+    patterns = [
+        ("metrics_summary.csv", "Per-algorithm metrics table"),
+        ("simulation_log.csv", "Per-step simulation log"),
+        ("emergency_log.csv", "Emergency event timeline"),
+        ("algorithm_timing.csv", "Algorithm execution timing"),
+        ("routing_log.csv", "Offline routing benchmarks"),
+        ("config_snapshot.yaml", "Experiment configuration"),
+        ("experiment_manifest.json", "Machine-readable experiment record"),
+        ("git_commit.txt", "Pinned repository commit"),
+        ("environment.json", "Python/SUMO/OS environment"),
+        ("network_metadata.json", "Network graph properties"),
+    ]
+    for name, desc in patterns:
+        if (output_dir / name).exists():
+            artifacts.append(f"  {name:<34} {desc}")
+    png_dir = output_dir / "plots" / "png"
+    if png_dir.is_dir():
+        count = len(list(png_dir.glob("*.*")))
+        artifacts.append(f"  plots/png/             {count} publication-ready figures")
+    data_dir = output_dir / "plots" / "data"
+    if data_dir.is_dir():
+        count = len(list(data_dir.glob("*.*")))
+        artifacts.append(f"  plots/data/            {count} plot data CSVs")
+    return artifacts
+
+
 def print_final_summary(output_dir: Path, sim_results: list, t_total: float) -> None:
     print()
     print("=" * 72)
@@ -838,26 +891,43 @@ def print_final_summary(output_dir: Path, sim_results: list, t_total: float) -> 
         print("  No experiment output found.")
         return
 
-    print(f"  Experiment:     {output_dir.name}")
-    print(f"  Output root:    {output_dir}")
+    # -- Experiment overview --
+    git_commit = get_git_commit()
+    git_tag = _get_git_tag_repr()
+    success = len(sim_results) > 0
+    status_line = "COMPLETED SUCCESSFULLY" if success else "INCOMPLETE"
+
+    print(f"  {status_line}")
     print()
 
     # Read config from snapshot
     cfg_yaml = output_dir / "config_snapshot.yaml"
+    snap = None
     if cfg_yaml.exists() and yaml:
         try:
             snap = yaml.safe_load(cfg_yaml.read_text(encoding="utf-8"))
-            sim = snap.get("simulation", {})
-            print(f"  Simulation steps:   {sim.get('steps', '?')}")
-            print(f"  Total vehicles:     {sim.get('vehicles', '?')}")
-            print(f"  Network:            {snap.get('network_file', '?')}")
-            print(f"  Algorithms:         {', '.join(snap.get('algorithms', []))}")
-            print(f"  Seed:               {sim.get('seed', '?')}")
-            print(f"  Reroute interval:   {sim.get('reroute_interval_steps', '?')}")
-            print(f"  Emergency count:    {sim.get('emergency_count', '?')}")
-            print()
         except Exception:
             pass
+
+    sim = snap.get("simulation", {}) if snap else {}
+    algos_executed = snap.get("algorithms", []) if snap else []
+    total_emergencies = sum(r.emergency_events for r in sim_results)
+    total_teleports = sum(r.teleport_count for r in sim_results)
+    total_vehicles = sim_results[0].total_vehicles if sim_results else sim.get("vehicles", "?")
+    total_steps = sim_results[0].total_steps if sim_results else sim.get("steps", "?")
+
+    print("  " + "─" * 58)
+    print("  EXPERIMENT OVERVIEW")
+    print("  " + "─" * 58)
+    print(f"  Algorithms executed:     {', '.join(algos_executed) if algos_executed else 'unknown'}")
+    print(f"  Total vehicles:          {total_vehicles}")
+    print(f"  Simulation steps:        {total_steps}")
+    print(f"  Total emergency events:  {total_emergencies}")
+    print(f"  Total teleports:         {total_teleports}")
+    print(f"  Total wall-clock time:   {selfmt(t_total)}")
+    print(f"  Repository commit:       {git_commit[:12]}{'...' if len(git_commit) > 12 else ''}")
+    print(f"  Repository tag:          {git_tag}")
+    print()
 
     # Read metrics CSV
     metrics_csv = output_dir / "metrics_summary.csv"
@@ -896,23 +966,21 @@ def print_final_summary(output_dir: Path, sim_results: list, t_total: float) -> 
                       f"{row['avg_distance_m']:<10}")
         print()
 
-    # Output locations
+    # Generated artifacts
+    artifacts = _categorize_artifacts(output_dir)
+    if artifacts:
+        print("  " + "─" * 58)
+        print("  GENERATED ARTIFACTS")
+        print("  " + "─" * 58)
+        for a in artifacts:
+            print(a)
+        print()
+
+    # Output directory
     print("  " + "─" * 58)
-    print("  OUTPUT LOCATIONS")
+    print("  OUTPUT DIRECTORY")
     print("  " + "─" * 58)
-    print(f"  Experiment dir:     {output_dir}")
-    print(f"  CSVs:               {output_dir / 'metrics_summary.csv'}")
-    print(f"  Step log:           {output_dir / 'simulation_log.csv'}")
-    print(f"  Emergency log:      {output_dir / 'emergency_log.csv'}")
-    print(f"  Timing log:         {output_dir / 'algorithm_timing.csv'}")
-    print(f"  Routing benchmarks: {output_dir / 'routing_log.csv'}")
-    print(f"  Config snapshot:    {output_dir / 'config_snapshot.yaml'}")
-    print(f"  Reproducibility:    {output_dir / 'git_commit.txt'}")
-    print(f"  Environment:        {output_dir / 'environment.json'}")
-    print(f"  Network metadata:   {output_dir / 'network_metadata.json'}")
-    print(f"  Route files:        {output_dir}/*.rou.xml")
-    print(f"  Plots (PNG+PDF):    {output_dir / 'plots' / 'png'}")
-    print(f"  Plots (data):       {output_dir / 'plots' / 'data'}")
+    print(f"  {output_dir}")
     print()
 
     print(f"  Total wall-clock: {selfmt(t_total)}")
@@ -922,7 +990,7 @@ def print_final_summary(output_dir: Path, sim_results: list, t_total: float) -> 
     print("   READY FOR THESIS DATA COLLECTION")
     print("  " + "=" * 58)
     print()
-    print("  Repository can be cloned onto another computer:")
+    print("  To rerun on another machine:")
     print(f"    git clone <repo-url>")
     print(f"    cd e3hybrid")
     print(f"    python preflight.py")
