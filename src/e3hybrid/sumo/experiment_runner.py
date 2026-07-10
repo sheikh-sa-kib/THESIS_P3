@@ -28,6 +28,9 @@ class SumoExperimentResult:
     simulation_time_ms: int
     algorithm_names: tuple[str, ...]
     emergency_event_count: int = 0
+    reroute_repair_count: int = 0
+    reroute_repair_fail_count: int = 0
+    reroute_reject_count: int = 0
     metadata: dict[str, object] = field(default_factory=dict)
 
 
@@ -137,6 +140,9 @@ class SumoExperimentRunner:
                 self._rerouting_managers.append(reroute_mgr)
 
             total_reroutes = 0
+            total_repairs = 0
+            total_repair_fails = 0
+            total_rejects = 0
             total_emergency_events = 0
 
             # 7. Step loop with integrated rerouting and emergency handling
@@ -155,6 +161,12 @@ class SumoExperimentRunner:
                             mgr.apply_reroutes(reroutes)
                             total_reroutes += len(reroutes)
 
+            # Aggregate reroute stats across all managers.
+            for mgr in self._rerouting_managers:
+                total_repairs += mgr.repair_count
+                total_repair_fails += mgr.repair_fail_count
+                total_rejects += mgr.reject_count
+
             # 8. Collect result
             all_vehicles: set[str] = set()
             for veh_list in vehicle_algorithm_map.values():
@@ -167,6 +179,9 @@ class SumoExperimentRunner:
                 simulation_time_ms=connection.get_simulation_time(),
                 algorithm_names=tuple(algorithms.keys()),
                 emergency_event_count=total_emergency_events,
+                reroute_repair_count=total_repairs,
+                reroute_repair_fail_count=total_repair_fails,
+                reroute_reject_count=total_rejects,
             )
 
         except Exception:

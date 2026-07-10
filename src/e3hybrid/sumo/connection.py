@@ -228,6 +228,46 @@ class SumoTraciConnection:
         return {}
 
     # ------------------------------------------------------------------
+    # Route validation / repair (direct SUMO queries)
+    # ------------------------------------------------------------------
+
+    def has_lane_connection(self, from_edge: str, to_edge: str) -> bool:
+        """Check whether any lane of *from_edge* connects to a lane of
+        *to_edge* according to the SUMO network.
+
+        Returns False if either edge is internal (starts with ``:``).
+        """
+        if from_edge.startswith(":") or to_edge.startswith(":"):
+            return False
+        try:
+            lane_count = self.get_edge_lane_count(from_edge)
+        except Exception:
+            return False
+        for li in range(lane_count):
+            lid = self.get_lane_id(from_edge, li)
+            links = self.get_lane_links(lid)
+            for link in links:
+                target_lane = str(link[0])
+                target_edge = "_".join(target_lane.split("_")[:-1])
+                if target_edge == to_edge:
+                    return True
+        return False
+
+    def find_route(self, from_edge: str, to_edge: str) -> list[str]:
+        """Compute a legal route between two edges via SUMO's internal
+        router.  Returns the edge ID sequence (including both endpoints),
+        or an empty list if no route exists.
+
+        Wraps ``traci.simulation.findRoute``.
+        """
+        try:
+            result = self._mod.simulation.findRoute(from_edge, to_edge)
+            edges = list(result.edges) if hasattr(result, "edges") else []
+            return edges
+        except Exception:
+            return []
+
+    # ------------------------------------------------------------------
     # Simulation queries
     # ------------------------------------------------------------------
 
