@@ -245,286 +245,142 @@ The experiment runner also generates per-algorithm route files at runtime if nee
 
 ---
 
-## 8. Configuration Options
+## 8. Experiment Presets
 
-### Script: `scripts/run_experiment.py`
-
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `--steps` | 300 | Number of simulation steps |
-| `--vehicles` | 300 | Number of vehicles to generate |
-| `--period` | 1.0 | Departure period (seconds) |
-| `--seed` | 42 | Random seed for reproducibility |
-| `--algorithms` | all 6 | Comma-separated: `dijkstra,astar,aco,bco,pso,e3hybrid` |
-| `--reroute-interval` | 10 | Steps between rerouting cycles |
-| `--emergency-count` | 3 | Number of emergency events to inject |
-| `--request-count` | 50 | Offline routing request count |
-| `--timeout` | 30.0 | Per-request routing timeout (seconds) |
-
-### Script: `scripts/run_validation.py`
-
-No arguments. Runs with fixed parameters: 300 steps, all 6 algorithms, seed 42.
-
-### Algorithm Parameters
-
-All algorithm parameters are set in their respective constructor defaults:
-
-| Algorithm | Key Parameters |
-|-----------|---------------|
-| Dijkstra | (none) |
-| A* | `heuristic="euclidean"` |
-| ACO | `n_ants=20, max_iterations=100, alpha=1.0, beta=2.0, rho=0.1, seed=42` |
-| BCO | `n_bees=15, max_iterations=50, seed=42` |
-| PSO | `n_particles=30, max_iterations=50, w=0.7, c1=1.5, c2=1.5, seed=42` |
-| E3-Hybrid | `n_aco=10, n_bco=10, n_pso=10, max_iterations=30, seed=42` |
-
-All algorithms receive the same seed from `RoutingFactory`.
-
----
-
-## 9. Running Headless Simulations
-
-Minimal SUMO simulation (no rerouting, just validate network loads):
+The experiment is launched via `run_thesis.py` with a `--preset` argument:
 
 ```bash
-python scripts/run_validation.py
+python run_thesis.py --preset smoke     # installation verification
+python run_thesis.py --preset light     # quick laptop comparison
+python run_thesis.py --preset heavy     # thesis-quality (default)
+python run_thesis.py --preset extreme   # stress-test
 ```
 
-This runs:
-1. Source code analysis of E3-Hybrid (9 component checks)
-2. Route computation for all 6 algorithms (offline routing check)
-3. Headless SUMO simulation for 300 steps
-4. Validation plots and CSVs to `outputs/validation/`
+If no preset is specified, `heavy` is used.
 
-Expected output (last lines):
-```
-  [PASS] All 6 algorithms compute routes on the real network
-  [PASS] SUMO simulation ran without errors
-  Results: F:\THESIS_NEW\outputs\validation
-```
+### Preset Parameters
 
-All 6 algorithms must show `PASS det` status (deterministic routing verified).
+| Parameter | smoke | light | heavy | extreme |
+|-----------|-------|-------|-------|---------|
+| Steps | 30 | 100 | 300 | 600 |
+| Vehicles | 10 | 50 | 300 | 500 |
+| Departure period | 3.0 s | 2.0 s | 1.0 s | 1.0 s |
+| Algorithms | dijkstra only | all 6 | all 6 | all 6 |
+| Reroute interval | disabled | 10 steps | 10 steps | 10 steps |
+| Emergencies | 0 | 0 | 3 | 5 |
+| Offline benchmarks | no | yes | yes | yes |
+| Auto plots | no | no | yes (34 figures) | yes |
+| Expected runtime | ~10 s | ~5–15 min | ~30–90 min | ~2–6 hr |
+| Target hardware | any | any laptop | desktop/server | 16 GB+ RAM, 8+ cores |
 
----
-
-## 10. Progress Reporting During Long Simulations
-
-The validation script (`scripts/run_validation.py`) includes a `ProgressReporter` class that displays:
-
-```
-  sumo       | Step 300  /300 100% | Veh 23   | Errors 0  | Elapsed 0.3s ETA 0s
-```
-
-The experiment script (`scripts/run_experiment.py`) prints per-algorithm status:
-
-```
-  [1/6] dijkstra
-    Completed: 5.2s  MaxVeh: 45  Reroutes: 120  Memory: 45.2MB
-```
-
-The reporter throttles updates to at most once per second to avoid terminal flooding. For very long simulations (1000+ steps), the ETA field provides runtime estimation.
-
----
-
-## 11. Running Validation Experiments
+### Multi-Seed Runs
 
 ```bash
-# Full validation (all checks, ~30 seconds)
+python run_thesis.py --preset heavy --seeds 42 43 44
+```
+
+Each seed produces a separate output directory. See `docs/PARAMETER_JUSTIFICATION.md`
+for full parameter rationale.
+
+---
+
+## 9. Running the Complete Experiment
+
+```bash
+# Smoke test (verify installation, ~10 seconds)
+python run_thesis.py --preset smoke
+
+# Light comparison (all 6 algos, ~5–15 minutes)
+python run_thesis.py --preset light
+
+# Thesis-quality experiment (default, ~30–90 minutes)
+python run_thesis.py --preset heavy
+
+# Stress test (powerful hardware only, ~2–6 hours)
+python run_thesis.py --preset extreme
+```
+
+Each preset automatically runs:
+1. Environment preflight check
+2. Pipeline validation (all 6 algorithms)
+3. Online SUMO simulation with live per-step progress
+4. Offline routing benchmarks
+5. CSV generation (metrics, step-log, timing, emergency, routing)
+6. Configuration snapshot + experiment manifest
+7. Plot generation (34 publication-ready figures, `heavy` and `extreme` only)
+8. Final comprehensive summary with all results
+
+The `heavy` preset is the recommended one-command thesis experiment.
+
+---
+
+## 10. Running Validation Experiments
+
+```bash
 python scripts/run_validation.py
 ```
 
 This validates:
-
 | Check | What It Verifies |
 |-------|-----------------|
-| E3-Hybrid components | All 9 required methods present in `hybrid.py` |
 | Route computation | Each algorithm can compute a route on the real network |
 | Deterministic routing | Two identical calls produce identical routes |
 | SUMO compatibility | Headless simulation runs without SUMO errors |
 | Network integrity | Network loads and 300 steps execute cleanly |
 
-Output files:
-```
-outputs/validation/
-  validation_summary.csv    # Per-algorithm metrics
-  validation_metrics.json   # Full JSON with routing integrity data
-  validation_plots.png      # 3-panel bar chart (exec time, max veh, memory)
-```
+Output: `outputs/validation/`
 
 ---
 
-## 12. Running Benchmark Experiments
-
-### Offline Routing Benchmarks
-
-The experiment script runs two phases. Phase 1 is online SUMO simulation. Phase 2 is offline routing-only benchmarks:
+## 11. Deterministic Replay Tests
 
 ```bash
-python scripts/run_experiment.py --request-count 100 --timeout 30.0
-```
-
-This sends 100 random routing requests to each algorithm (using the same graph) and measures:
-- Success rate
-- Average/max/min runtime
-- Average route distance
-
-Results go to `routing_log.csv` in the experiment output directory.
-
-### Online Simulation Benchmarks
-
-```bash
-python scripts/run_experiment.py --steps 300 --vehicles 300 --period 1.0
-```
-
-This runs 300-step SUMO simulations, each with 300 vehicles, one algorithm at a time:
-- Reroutes every 10 steps
-- Collects active vehicles, congestion, blocked edges, speeds
-- Tracks travel times, teleportations, completed trips
-- Measures execution time and peak memory
-
----
-
-## 13. Running Deterministic Replay Tests
-
-```bash
-# Run deterministic replay verification (requires SUMO)
 pytest tests/integration/test_determinism.py -v
 ```
 
-Expected output:
-```
-tests/integration/test_determinism.py::TestDeterminism::test_same_seed_identical PASSED
-tests/integration/test_determinism.py::TestDeterminism::test_multi_algo_same_seed_identical PASSED
-```
+---
 
-These tests verify:
-1. Running the same algorithm twice with the same seed produces identical results
-2. Running multiple algorithms with the same seed is deterministic
+## 12. Emergency Event Design
+
+Emergencies are injected into the `heavy` and `extreme` presets via graph-state updates:
+
+1. A deterministic schedule generates `N` events at random steps (seeded RNG)
+2. Each event adds a 120 s emergency penalty to 3 random edges
+3. The penalty is removed after 20 simulation steps
+4. All routing algorithms see the same modified graph
+
+This design ensures fair comparison — emergencies affect cost computation, not
+algorithm-specific code paths.
 
 ---
 
-## 14. Running Emergency Simulations
+## 13. Congestion Dynamics
 
-Emergency simulation is integrated into the experiment runner. Emergency events are injected via **graph-state updates only** (no algorithm-specific branches):
+Congestion emerges naturally from traffic density on the 715-node network:
 
-```bash
-# 3 emergency events (default)
-python scripts/run_experiment.py --emergency-count 3
+| Density | Vehicle count | Period |
+|---------|---------------|--------|
+| Light | 30–60 | 5–10 s |
+| Moderate | 60–200 | 2–5 s |
+| Heavy | 200–500 | 0.5–2 s |
+| Gridlock risk | >500 | — |
 
-# No emergencies (baseline comparison)
-python scripts/run_experiment.py --emergency-count 0
+The `heavy` preset (300 vehicles, 1.0 s period) produces moderate congestion,
+while `extreme` (500 vehicles) approaches gridlock.
 
-# Heavy emergency scenario
-python scripts/run_experiment.py --emergency-count 10 --steps 500
-```
-
-### How Emergency Injection Works
-
-1. Before the step loop, a deterministic schedule is generated:
-   - `N` events at random steps (seeded RNG, seed + 2000)
-   - Each event affects 3 random edges
-   - Duration: 20 simulation steps per event
-
-2. On the activation step:
-   - An emergency penalty (120s) is added to each affected edge
-   - Penalty is stored in `MutableEdgeState.emergency_penalty_s`
-   - Only the `DirectedGraph` object is modified (no SUMO state changes)
-
-3. On the resolution step (20 steps later):
-   - The penalty is removed from each affected edge
-   - Original state is restored
-
-4. All routing algorithms see the same modified graph — emergency effects propagate through cost computation, not through algorithm-specific code.
-
-### Emergency Detection and Reporting
-
-The simulation loop automatically tracks:
-- `total_emergency`: Number of emergency events activated
-- `StepMetrics.emergency_events`: Events active per step
-- `metrics_summary.csv.emergency_events`: Total per algorithm
-
-If SUMO emergency vehicles with type "emergency" are present in the simulation, the `SumoEmergencyManager` class in `src/e3hybrid/sumo/emergency_manager.py` detects them via vehicle type scan and applies graph effects.
+Metrics collected per step: congestion edges (>80 % occupancy), blocked edges
+(>95 %), average speed, teleport count, completed trips.
 
 ---
 
-## 15. Running Congestion Experiments
-
-Congestion emerges naturally from traffic density. The experiment script measures:
-
-```bash
-# High-density congestion test
-python scripts/run_experiment.py --vehicles 500 --period 0.5 --steps 600
-
-# Low-density baseline
-python scripts/run_experiment.py --vehicles 50 --period 5.0 --steps 300
-```
-
-Congestion metrics collected:
-- `congestion_edges`: Edges with occupancy > 80%
-- `blocked_edges`: Edges with occupancy > 95%
-- `avg_speed_mps`: Average vehicle speed across all edges
-- Each metric is recorded per step in `simulation_log.csv`
-
-Recommended vehicle counts for the 1130-edge Manhattan network:
-- **Light traffic**: 30–60 vehicles (period 5–10s)
-- **Moderate traffic**: 60–200 vehicles (period 2–5s)
-- **Heavy traffic**: 200–500 vehicles (period 0.5–2s)
-- **Gridlock risk**: >500 vehicles
-
----
-
-## 16. Running All Six Algorithms Individually
-
-```bash
-# Run a single algorithm
-python scripts/run_experiment.py --algorithms dijkstra --steps 200 --vehicles 100
-
-python scripts/run_experiment.py --algorithms astar --steps 200 --vehicles 100
-
-python scripts/run_experiment.py --algorithms aco --steps 200 --vehicles 100
-
-python scripts/run_experiment.py --algorithms bco --steps 200 --vehicles 100
-
-python scripts/run_experiment.py --algorithms pso --steps 200 --vehicles 100
-
-python scripts/run_experiment.py --algorithms e3hybrid --steps 200 --vehicles 100
-```
-
-Each algorithm runs in a separate SUMO process (sequential, not concurrent). Total experiment time = sum of individual times.
-
-To avoid regenerating route files for each algorithm, use the same seed:
-```bash
-# Generate once, then reuse
-python scripts/run_experiment.py --algorithms dijkstra --seed 42
-# For subsequent runs, the route file already exists in the output directory
-```
-
----
-
-## 17. Running Comparative Experiments
-
-```bash
-# Compare all 6 algorithms
-python scripts/run_experiment.py \
-  --steps 300 --vehicles 300 --period 1.0 --seed 42 \
-  --algorithms dijkstra,astar,aco,bco,pso,e3hybrid \
-  --reroute-interval 10 --emergency-count 3
-```
-
-This is the default invocation. It produces:
-- 6 sequential SUMO simulations (one per algorithm)
-- 300 steps each, 300 vehicles, rerouting every 10 steps
-- 3 emergency events per simulation
-
-### Experiment Design for Thesis Figures
+## 14. Experiment Design for Thesis Figures
 
 | Experiment | Command | Purpose |
 |------------|---------|---------|
-| Baseline comparison | `--algorithms d,a,aco,bco,pso,e3 --steps 300 --vehicles 200` | All 6 on same network, no emergencies |
-| With emergencies | Add `--emergency-count 5` | Compare emergency response |
-| Scaling test | `--vehicles 100,200,300,400,500` (run separately) | Algorithm scalability |
-| Reroute sensitivity | `--reroute-interval 5,10,20,30` (run separately) | Effect of rerouting frequency |
-| Seed sensitivity | `--seed 42,43,44,45,46` (run separately) | Statistical robustness |
+| Baseline comparison | `--preset light` | All 6 algorithms, no emergencies |
+| With emergencies | `--preset heavy` | Dynamic routing under emergencies |
+| Multi-seed stats | `--preset heavy --seeds 42 43 44` | Statistical robustness |
+| Scaling test | `--preset extreme` | Performance under high load |
 
 ---
 

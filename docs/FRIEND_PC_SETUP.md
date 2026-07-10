@@ -21,7 +21,7 @@ $env:SUMO_HOME = "C:\Program Files (x86)\Eclipse\Sumo"
 
 python preflight.py
 
-python run_thesis.py
+python run_thesis.py --preset heavy
 ```
 
 ---
@@ -38,16 +38,30 @@ python run_thesis.py
 | `pip install -r requirements.txt` | Install runtime dependencies |
 | `$env:SUMO_HOME = ...` | Point to SUMO installation |
 | `python preflight.py` | Verify environment before experiment |
-| `python run_thesis.py` | Run everything: validation → experiment → plots → summary |
+| `python run_thesis.py --preset heavy` | Run complete thesis experiment (one command) |
 
----
+## Presets
 
-## After experiment finishes — regenerate figures
+Use `--preset` to choose the experiment scope:
+
+| Preset | Command | Purpose |
+|--------|---------|---------|
+| smoke | `run_thesis.py --preset smoke` | Verify installation (~10 s) |
+| light | `run_thesis.py --preset light` | Quick laptop comparison (~5–15 min) |
+| **heavy** | `run_thesis.py --preset heavy` | **Thesis-quality experiment (~30–90 min)** |
+| extreme | `run_thesis.py --preset extreme` | Stress-test (~2–6 hr) |
+
+The `heavy` preset runs: preflight → validation → all 6 algorithms (online SUMO
+simulation) → offline benchmarks → CSV generation → 34 publication-ready plots →
+final summary. One command, no manual steps.
+
+## Multi-seed runs (optional)
 
 ```powershell
-$env:SUMO_HOME = "C:\Program Files (x86)\Eclipse\Sumo"
-python scripts/generate_all_plots.py -o C:\Users\SAKIB\Desktop\thesis_figures
+python run_thesis.py --preset heavy --seeds 42 43 44
 ```
+
+---
 
 ## Run tests
 

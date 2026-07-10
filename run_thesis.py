@@ -2,7 +2,18 @@
 """Complete thesis experiment launcher — one command.
 
 Usage:
-    python run_thesis.py
+    python run_thesis.py                              (uses --preset heavy)
+    python run_thesis.py --preset smoke
+    python run_thesis.py --preset light
+    python run_thesis.py --preset heavy
+    python run_thesis.py --preset extreme
+    python run_thesis.py --preset heavy --seeds 42 43 44
+
+Presets:
+    smoke    — installation verification (10s runtime)
+    light    — quick laptop comparison (all 6 algos, ~5 min)
+    heavy    — thesis-quality experiment (default, ~30-90 min)
+    extreme  — stress-test for powerful hardware (~2-6 hr)
 
 Automatically:
   1.  Environment preflight check
@@ -47,6 +58,63 @@ except ImportError:
 
 # -- Project paths --------------------------------------------------------
 ALL_ALGORITHMS = ("dijkstra", "astar", "aco", "bco", "pso", "e3hybrid")
+
+# -- Experiment presets ----------------------------------------------------
+PRESETS: dict[str, dict[str, object]] = {
+    "smoke": {
+        "steps": 30,
+        "vehicles": 10,
+        "departure_period": 3.0,
+        "seed": 42,
+        "algorithms": ("dijkstra",),
+        "reroute_interval": 999,  # effectively disabled
+        "emergency_count": 0,
+        "offline_benchmarks": False,
+        "generate_plots": False,
+        "description": "Installation verification — 1 algo, 30 steps, 10 vehicles (~10s)",
+        "expected_runtime": "~10-20 seconds",
+    },
+    "light": {
+        "steps": 100,
+        "vehicles": 50,
+        "departure_period": 2.0,
+        "seed": 42,
+        "algorithms": ALL_ALGORITHMS,
+        "reroute_interval": 10,
+        "emergency_count": 0,
+        "offline_benchmarks": True,
+        "generate_plots": False,
+        "description": "Quick comparison — all 6 algos, 100 steps, 50 vehicles (~5-15 min)",
+        "expected_runtime": "~5-15 minutes",
+    },
+    "heavy": {
+        "steps": 300,
+        "vehicles": 300,
+        "departure_period": 1.0,
+        "seed": 42,
+        "algorithms": ALL_ALGORITHMS,
+        "reroute_interval": 10,
+        "emergency_count": 3,
+        "offline_benchmarks": True,
+        "generate_plots": True,
+        "description": "Thesis-quality — all 6 algos, 300 steps, 300 vehicles, emergencies, benches, plots (~30-90 min)",
+        "expected_runtime": "~30-90 minutes",
+    },
+    "extreme": {
+        "steps": 600,
+        "vehicles": 500,
+        "departure_period": 1.0,
+        "seed": 42,
+        "algorithms": ALL_ALGORITHMS,
+        "reroute_interval": 10,
+        "emergency_count": 5,
+        "offline_benchmarks": True,
+        "generate_plots": True,
+        "description": "Stress-test — all 6 algos, 600 steps, 500 vehicles, 5 emergencies, full output (~2-6 hr)",
+        "expected_runtime": "~2-6 hours",
+    },
+}
+
 DATA_DIR = _PROJECT_ROOT / "data"
 NET_FILE = DATA_DIR / "maps" / "midtown_manhattan.net.xml"
 ROUTE_FILE = DATA_DIR / "routes" / "midtown_manhattan.rou.xml"
@@ -75,6 +143,7 @@ def _imports() -> None:
         algorithms: tuple[str, ...] = ALL_ALGORITHMS
         reroute_interval: int = 10
         emergency_count: int = 3
+        offline_benchmarks: bool = True
 
     @dataclass
     class StepMetrics:
@@ -741,7 +810,7 @@ def run_experiment(config: ExperimentConfig) -> Path | None:
         print(f"  {'=' * 58}")
         result = simulate_algorithm(algo, config, output_dir, i + 1, len(config.algorithms), t_exp_start)
         sim_results.append(result)
-        print(f"  {'─' * 58}")
+        print(f"  {'-' * 58}")
         print(f"  [{i+1}/{len(config.algorithms)}] {algo.upper()} DONE  "
               f"exec={selfmt(result.total_execution_s)}  "
               f"reroutes={result.total_reroutes}  "
@@ -780,30 +849,31 @@ def run_experiment(config: ExperimentConfig) -> Path | None:
     else:
         emerg_path.unlink(missing_ok=True)
 
-    # Offline benchmarks
-    print()
-    print(f"  {'=' * 58}")
-    print("  OFFLINE ROUTING BENCHMARKS")
-    print(f"  {'=' * 58}")
-    routing_results = run_offline_benchmarks(
-        config.algorithms, 50, config.seed + 1, 30.0, output_dir,
-    )
-    routing_path = output_dir / "routing_log.csv"
-    with routing_path.open("w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(["algorithm", "success_rate", "avg_runtime_s", "max_runtime_s",
-                     "min_runtime_s", "avg_distance_m", "successes", "failures",
-                     "total_requests"])
-        for algo_name, stats in routing_results.items():
-            w.writerow([algo_name,
-                       f"{stats['success_rate']:.3f}",
-                       f"{stats['avg_runtime_s']:.6f}",
-                       f"{stats['max_runtime_s']:.6f}",
-                       f"{stats['min_runtime_s']:.6f}",
-                       f"{stats['avg_distance_m']:.1f}",
-                       stats['successes'],
-                       stats['failures'],
-                       stats['total_requests']])
+    # Offline benchmarks (only if enabled)
+    if getattr(config, 'offline_benchmarks', True):
+        print()
+        print(f"  {'=' * 58}")
+        print("  OFFLINE ROUTING BENCHMARKS")
+        print(f"  {'=' * 58}")
+        routing_results = run_offline_benchmarks(
+            config.algorithms, 50, config.seed + 1, 30.0, output_dir,
+        )
+        routing_path = output_dir / "routing_log.csv"
+        with routing_path.open("w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["algorithm", "success_rate", "avg_runtime_s", "max_runtime_s",
+                         "min_runtime_s", "avg_distance_m", "successes", "failures",
+                         "total_requests"])
+            for algo_name, stats in routing_results.items():
+                w.writerow([algo_name,
+                           f"{stats['success_rate']:.3f}",
+                           f"{stats['avg_runtime_s']:.6f}",
+                           f"{stats['max_runtime_s']:.6f}",
+                           f"{stats['min_runtime_s']:.6f}",
+                           f"{stats['avg_distance_m']:.1f}",
+                           stats['successes'],
+                           stats['failures'],
+                           stats['total_requests']])
 
     # Network metadata
     last_algo = config.algorithms[-1]
@@ -928,9 +998,9 @@ def print_final_summary(output_dir: Path, sim_results: list, t_total: float) -> 
     total_vehicles = sim_results[0].total_vehicles if sim_results else sim.get("vehicles", "?")
     total_steps = sim_results[0].total_steps if sim_results else sim.get("steps", "?")
 
-    print("  " + "─" * 58)
+    print("  " + "-" * 58)
     print("  EXPERIMENT OVERVIEW")
-    print("  " + "─" * 58)
+    print("  " + "-" * 58)
     print(f"  Algorithms executed:     {', '.join(algos_executed) if algos_executed else 'unknown'}")
     print(f"  Total vehicles:          {total_vehicles}")
     print(f"  Simulation steps:        {total_steps}")
@@ -944,10 +1014,10 @@ def print_final_summary(output_dir: Path, sim_results: list, t_total: float) -> 
     # Read metrics CSV
     metrics_csv = output_dir / "metrics_summary.csv"
     if metrics_csv.exists():
-        print("  " + "─" * 58)
+        print("  " + "-" * 58)
         print(f"  {'Algorithm':<12} {'Travel(s)':<10} {'Speed':<8} {'Reroutes':<9} "
               f"{'Thruput':<8} {'Emerg':<6} {'Telport':<8} {'Exec(s)':<9} {'Mem(MB)':<8}")
-        print("  " + "─" * 58)
+        print("  " + "-" * 58)
         with metrics_csv.open(encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
@@ -961,12 +1031,12 @@ def print_final_summary(output_dir: Path, sim_results: list, t_total: float) -> 
     # Read routing benchmarks
     routing_csv = output_dir / "routing_log.csv"
     if routing_csv.exists():
-        print("  " + "─" * 58)
+        print("  " + "-" * 58)
         print("  ROUTING BENCHMARKS")
-        print("  " + "─" * 58)
+        print("  " + "-" * 58)
         print(f"  {'Algorithm':<12} {'Success%':<9} {'Avg(ms)':<10} "
               f"{'Min(ms)':<10} {'Max(ms)':<10} {'Dist(m)':<10}")
-        print("  " + "─" * 58)
+        print("  " + "-" * 58)
         with routing_csv.open(encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
@@ -981,17 +1051,17 @@ def print_final_summary(output_dir: Path, sim_results: list, t_total: float) -> 
     # Generated artifacts
     artifacts = _categorize_artifacts(output_dir)
     if artifacts:
-        print("  " + "─" * 58)
+        print("  " + "-" * 58)
         print("  GENERATED ARTIFACTS")
-        print("  " + "─" * 58)
+        print("  " + "-" * 58)
         for a in artifacts:
             print(a)
         print()
 
     # Output directory
-    print("  " + "─" * 58)
+    print("  " + "-" * 58)
     print("  OUTPUT DIRECTORY")
-    print("  " + "─" * 58)
+    print("  " + "-" * 58)
     print(f"  {output_dir}")
     print()
 
@@ -1011,10 +1081,76 @@ def print_final_summary(output_dir: Path, sim_results: list, t_total: float) -> 
 
 
 # ===================================================================
+#  PRESET HELPERS
+# ===================================================================
+def _describe_presets() -> str:
+    lines = ["", "  Available presets (use --preset <name>):", ""]
+    for name, cfg in PRESETS.items():
+        rec = "  [RECOMMENDED]" if name == "heavy" else ""
+        lines.append(f"    {name:<10} {cfg['description']} {rec}")
+        lines.append(f"               Expected runtime: {cfg['expected_runtime']}")
+        lines.append("")
+    lines.append("  Examples:")
+    lines.append('    python run_thesis.py --preset smoke')
+    lines.append('    python run_thesis.py --preset light')
+    lines.append('    python run_thesis.py --preset heavy')
+    lines.append('    python run_thesis.py --preset extreme')
+    lines.append('    python run_thesis.py --preset heavy --seeds 42 43 44')
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _resolve_preset(args: list[str]) -> tuple[str, list[int]]:
+    """Parse --preset and --seeds from raw argv before full argparse setup."""
+    preset = "heavy"
+    seeds: list[int] = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--preset" and i + 1 < len(args):
+            preset = args[i + 1].lower()
+            if preset not in PRESETS:
+                print(f"[ERROR] Unknown preset '{preset}'.")
+                print(_describe_presets())
+                sys.exit(1)
+            i += 2
+        elif args[i] == "--seeds":
+            j = i + 1
+            while j < len(args) and not args[j].startswith("--"):
+                try:
+                    seeds.append(int(args[j]))
+                except ValueError:
+                    print(f"[ERROR] Invalid seed value: {args[j]}")
+                    sys.exit(1)
+                j += 1
+            i = j
+        else:
+            i += 1
+    if not seeds:
+        seeds = [PRESETS[preset]["seed"]]  # type: ignore[arg-type]
+    return preset, seeds
+
+
+# ===================================================================
 #  MAIN
 # ===================================================================
-def main() -> int:
-    t_overall = time.time()
+def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+
+    if "--help" in argv or "-h" in argv:
+        print(__doc__)
+        print(_describe_presets())
+        return 0
+
+    preset_name, seeds = _resolve_preset(argv)
+    pc = PRESETS[preset_name]
+
+    print()
+    print("=" * 72)
+    print(f"  PRESET: {preset_name.upper()}")
+    print(f"  {pc['description']}")
+    print(f"  Seeds: {seeds}")
+    print("=" * 72)
 
     # Step 1: Preflight
     if run_preflight() != 0:
@@ -1023,33 +1159,50 @@ def main() -> int:
     # Step 2: Validation
     run_validation()
 
-    # Step 3: Full experiment
+    t_overall = time.time()
+
+    # Step 3: Full experiment (one loop per seed)
     _imports()
+    all_output_dirs: list[Path] = []
 
-    config = ExperimentConfig(
-        steps=300,
-        vehicles=300,
-        departure_period=1.0,
-        seed=42,
-        algorithms=ALL_ALGORITHMS,
-        reroute_interval=10,
-        emergency_count=3,
-    )
+    for seed_idx, seed in enumerate(seeds):
+        if len(seeds) > 1:
+            print()
+            print("=" * 72)
+            print(f"  SEED {seed_idx + 1}/{len(seeds)}  (seed={seed})")
+            print("=" * 72)
 
-    output_dir = run_experiment(config)
+        config = ExperimentConfig(
+            steps=pc["steps"],
+            vehicles=pc["vehicles"],
+            departure_period=pc["departure_period"],
+            seed=seed,
+            algorithms=pc["algorithms"],
+            reroute_interval=pc["reroute_interval"],
+            emergency_count=pc["emergency_count"],
+            offline_benchmarks=pc["offline_benchmarks"],
+        )
 
-    if not output_dir:
-        return 1
+        output_dir = run_experiment(config)
+        if not output_dir:
+            return 1
+        all_output_dirs.append(output_dir)
 
-    # Step 4: Plot generation
-    run_plot_generation()
+    # Step 4: Plot generation (only if preset says so)
+    if pc["generate_plots"]:
+        run_plot_generation()
+    else:
+        print()
+        print("=" * 72)
+        print("  [--] PLOT GENERATION SKIPPED (not configured for this preset)")
+        print("=" * 72)
 
     # Step 5: Final summary
     t_total = time.time() - t_overall
 
-    # Read results back for summary
-    sim_results = []
-    metrics_csv = output_dir / "metrics_summary.csv"
+    last_dir = all_output_dirs[-1]
+    sim_results: list[AlgorithmResult] = []
+    metrics_csv = last_dir / "metrics_summary.csv"
     if metrics_csv.exists():
         _imports()
         with metrics_csv.open(encoding="utf-8") as f:
@@ -1073,7 +1226,18 @@ def main() -> int:
                 r.peak_memory_mb = float(row["peak_memory_mb"])
                 sim_results.append(r)
 
-    print_final_summary(output_dir, sim_results, t_total)
+    print_final_summary(last_dir, sim_results, t_total)
+
+    # Summary of all seed outputs
+    if len(seeds) > 1:
+        print()
+        print("  " + "=" * 58)
+        print("  ALL SEED OUTPUT DIRECTORIES")
+        print("  " + "=" * 58)
+        for d in all_output_dirs:
+            print(f"    {d}")
+        print()
+
     return 0
 
 

@@ -31,9 +31,11 @@ e3hybrid/
 │   ├── cli/               # CLI entry point
 │   ├── core/              # Base exceptions and types
 │   └── utils/             # Logging, reproducibility helpers
+├── run_thesis.py           # MAIN: preset-based experiment launcher
+├── preflight.py            # Environment preflight checker
 ├── scripts/
-│   ├── run_experiment.py  # MAIN: full thesis experiment (online+offline)
-│   └── run_validation.py  # Lightweight: validates SUMO + all algorithms
+│   ├── run_validation.py   # Lightweight: validates SUMO + all algorithms
+│   └── generate_all_plots.py  # Plot generation (auto-invoked by heavy preset)
 ├── data/
 │   ├── maps/
 │   │   └── midtown_manhattan.net.xml  # 1.87 MB, 16,203 lines, 53 dead-end nodes
@@ -354,7 +356,7 @@ Pre-generated for quick validation. The experiment script generates its own rout
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/run_experiment.py` | Full thesis experiment (online simulation + offline benchmarks) |
+| `run_thesis.py` | **Main launcher** — preset-based experiment runner (replaces `run_experiment.py`) |
 | `scripts/run_validation.py` | Lightweight validation (SUMO smoke test + routing check) |
 
 ### 4.5 Verification
@@ -368,6 +370,21 @@ python scripts/run_validation.py
 ```
 
 Expected: All 6 algorithms PASS, SUMO simulation runs with 0 errors.
+
+### 4.6 Experiment Presets
+
+The main launcher uses named presets instead of long CLI arguments:
+
+```powershell
+python run_thesis.py --preset smoke     # ~10 s verification
+python run_thesis.py --preset light     # ~5-15 min, all 6 algos
+python run_thesis.py --preset heavy     # ~30-90 min, thesis-quality [DEFAULT]
+python run_thesis.py --preset extreme   # ~2-6 hr, stress-test
+```
+
+Each preset is a complete experiment: preflight → validation → SUMO simulation →
+offline benchmarks → CSV generation → plots → summary. The heavy preset
+additionally generates 34 publication-ready plots automatically.
 
 ---
 
@@ -553,12 +570,13 @@ If ImportError occurs, report the trace and fix the cyclic import.
 
 ### 7.7 Experiment Configuration Valid
 
-Verify the default experiment config parses:
+Verify the launcher and presets work:
 ```powershell
-python scripts/run_experiment.py --help
+python run_thesis.py --help
 ```
 
-Expected output shows all CLI arguments: `--steps`, `--vehicles`, `--period`, `--seed`, `--algorithms`, `--reroute-interval`, `--emergency-count`, `--request-count`, `--timeout`.
+Expected output shows preset descriptions: smoke, light, heavy, extreme,
+with `heavy` as the recommended default.
 
 ### 7.8 Quick Experiment Smoke Test
 
@@ -567,38 +585,41 @@ Run a minimal experiment to confirm the workflow:
 $env:SUMO_HOME = "C:\Program Files (x86)\Eclipse\Sumo"
 $env:PYTHONPATH = "src"
 .venv\Scripts\Activate.ps1
-python scripts/run_experiment.py --steps 30 --vehicles 10 --algorithms dijkstra --emergency-count 1 --request-count 5
+python run_thesis.py --preset smoke
 ```
 
 Expected:
-- Phase 1 completes: "Completed: X.Xs MaxVeh: Y Reroutes: Z Memory: W.WMB"
-- Phase 2 completes: routing_log.csv generated
+- Preflight passes (all checks green)
+- Pipeline validation runs
+- Simulation completes (~10 s)
 - Output files written to `outputs/experiments/run_*`
+- Final summary printed
 - Exit code 0
 
 ---
 
 ## 8. FULL THESIS EXPERIMENT
 
-### 8.1 Command
+### 8.1 Command (One-Line)
 
 ```powershell
 $env:SUMO_HOME = "C:\Program Files (x86)\Eclipse\Sumo"
 $env:PYTHONPATH = "src"
 .venv\Scripts\Activate.ps1
-python scripts/run_experiment.py `
-  --steps 300 `
-  --vehicles 300 `
-  --period 1.0 `
-  --seed 42 `
-  --algorithms dijkstra,astar,aco,bco,pso,e3hybrid `
-  --reroute-interval 10 `
-  --emergency-count 3 `
-  --request-count 100 `
-  --timeout 60.0
+python run_thesis.py --preset heavy
 ```
 
-### 8.2 What This Does
+This single command replaces the old multi-argument invocation. It runs:
+- Environment preflight → pipeline validation → all 6 algorithms (online SUMO) →
+  offline routing benchmarks → CSV generation → 34 publication-ready plots →
+  final summary.
+
+For multi-seed statistical significance:
+```powershell
+python run_thesis.py --preset heavy --seeds 42 43 44
+```
+
+### 8.2 What The Heavy Preset Does
 
 **Phase 1 — Online SUMO Simulation (per algorithm, sequentially):**
 - For each of 6 algorithms:
@@ -612,21 +633,30 @@ python scripts/run_experiment.py `
   5. Collect metrics and shut down
 
 **Phase 2 — Offline Routing Benchmarks:**
-- 100 random source-destination pairs (seeded at 43)
+- 50 random source-destination pairs (seeded at 43)
 - Each algorithm routes all pairs
 - Record success rate, runtime, distance
 
-**Phase 3 — Plot Generation:**
-- 6 plots: execution_time, vehicles_over_time, congestion_heatmap, travel_time_comparison, throughput, memory_usage
+**Phase 3 — Plot Generation (automatic):**
+- 34 figures across 9 categories:
+  execution_time, vehicles_over_time, rerouting_latency, congestion_heatmap,
+  travel_time_comparison, throughput, emergency_response, memory_usage,
+  algorithm_scaling
+
+**Phase 4 — Summary Report:**
+- Algorithm comparison table (travel time, speed, reroutes, throughput, peak memory)
+- Routing benchmark table (success rate, avg/min/max runtime, distance)
+- Complete artifact listing
+- Output directory path
 
 ### 8.3 Expected Runtime
 
 | Component | Estimated |
 |-----------|-----------|
-| Route generation (6 files) | ~2-5 min |
-| Dijkstra (300 steps) | ~30-60 sec |
-| A* (300 steps) | ~30-60 sec |
-| ACO (300 steps) | ~5-15 min |
+| Route generation (6 files) | ~1-2 min |
+| Dijkstra (300 steps) | ~10-20 sec |
+| A* (300 steps) | ~10-20 sec |
+| ACO (300 steps) | ~10-30 min |
 | BCO (300 steps) | ~5-15 min |
 | PSO (300 steps) | ~10-20 min |
 | E3-Hybrid (300 steps) | ~15-30 min |
@@ -966,16 +996,28 @@ python scripts/run_validation.py
 $env:SUMO_HOME = "C:\Program Files (x86)\Eclipse\Sumo"
 $env:PYTHONPATH = "src"
 .venv\Scripts\Activate.ps1
-python scripts/run_experiment.py --steps 30 --vehicles 10 --algorithms dijkstra --emergency-count 1 --request-count 5
+python run_thesis.py --preset smoke
 ```
 
-### Run Full Thesis Experiment
+### Run Full Thesis Experiment (One Command)
 
 ```powershell
 $env:SUMO_HOME = "C:\Program Files (x86)\Eclipse\Sumo"
 $env:PYTHONPATH = "src"
 .venv\Scripts\Activate.ps1
-python scripts/run_experiment.py --steps 300 --vehicles 300 --period 1.0 --seed 42 --algorithms dijkstra,astar,aco,bco,pso,e3hybrid --reroute-interval 10 --emergency-count 3 --request-count 100 --timeout 60.0
+python run_thesis.py --preset heavy
+```
+
+This automatically runs all 6 algorithms, emergencies, rerouting, offline benchmarks,
+CSV generation, 34 publication-ready plots, and final summary. No manual steps needed.
+
+### Run Full Experiment with Multiple Seeds
+
+```powershell
+$env:SUMO_HOME = "C:\Program Files (x86)\Eclipse\Sumo"
+$env:PYTHONPATH = "src"
+.venv\Scripts\Activate.ps1
+python run_thesis.py --preset heavy --seeds 42 43 44
 ```
 
 ### Generate Plots (Standalone)
