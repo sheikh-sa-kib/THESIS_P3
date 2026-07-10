@@ -1012,6 +1012,8 @@ def main() -> int:
     run_validation()
 
     # Step 3: Full experiment
+    _imports()
+
     config = ExperimentConfig(
         steps=300,
         vehicles=300,
@@ -1021,7 +1023,6 @@ def main() -> int:
         reroute_interval=10,
         emergency_count=3,
     )
-    _imports()
 
     output_dir = run_experiment(config)
 
