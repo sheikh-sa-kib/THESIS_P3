@@ -217,14 +217,16 @@ def check_packages() -> None:
         else:
             _check(desc, False, f"{pkg} not importable", "setup")
 
-    # Dev packages
+    # Dev packages (from requirements-dev.txt)
+    dev_req = ROOT / "requirements-dev.txt"
+    dev_hint = f"Install: pip install -r {dev_req.name}" if dev_req.exists() else "Install for development tools"
     for pkg, desc in DEV_PACKAGES.items():
         installed = _try_import(pkg)
         if installed:
             ver = _get_version(pkg)
             _check(desc, True, f"{pkg} {ver}", "setup")
         else:
-            _opt(desc, f"{pkg} not installed (optional for development)", "setup")
+            _opt(desc, f"{pkg} not installed. {dev_hint}", "setup")
 
 
 # ---------------------------------------------------------------------------
