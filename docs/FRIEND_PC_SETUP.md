@@ -19,7 +19,7 @@ cd e3hybrid
 # Check if SUMO is installed at the expected path
 if (Test-Path "C:\Program Files (x86)\Eclipse\Sumo") {
     Write-Host "SUMO found"
-    & "C:\Program Files (x86)\Eclipse\Sumo\sumo.exe" --version
+    & "C:\Program Files (x86)\Eclipse\Sumo\bin\sumo.exe" --version
 } else {
     Write-Host "SUMO NOT FOUND — download from https://sumo.dlr.de/download/"
     Write-Host "Install SUMO 1.27.1 (sumo-1_27_1+setup.exe)"
@@ -56,57 +56,49 @@ python -m venv .venv
 
 ```powershell
 python -m pip install --upgrade pip
-pip install pyyaml matplotlib psutil pytest pytest-cov
+pip install -r requirements.txt
+```
+
+Optional (for development/testing):
+```powershell
+pip install -r requirements-dev.txt
 ```
 
 ---
 
-## 6. Verify Everything Works
+## 6. Run Preflight Check
 
 ```powershell
 $env:SUMO_HOME = "C:\Program Files (x86)\Eclipse\Sumo"
-$env:PYTHONPATH = "src"
-python scripts/run_validation.py
+python preflight.py
 ```
 
-Expected: All 6 algorithms PASS, SUMO runs with 0 errors.
+Expected: All checks PASS or OPTIONAL.
 
 ---
 
-## 7. Run Determinism Tests
-
-```powershell
-python -m pytest tests/integration/test_determinism.py -v --tb=short
-```
-
-Expected: 4 tests pass.
-
----
-
-## 8. Run Short Pilot (2 algorithms, ~2 minutes)
+## 7. Run Complete Thesis Experiment (one command)
 
 ```powershell
 $env:SUMO_HOME = "C:\Program Files (x86)\Eclipse\Sumo"
-$env:PYTHONPATH = "src"
-python scripts/run_experiment.py --steps 50 --vehicles 30 --algorithms dijkstra,astar --emergency-count 1 --request-count 20
+python run_thesis.py
 ```
+
+This single command runs:
+1. Preflight environment check
+2. Pipeline validation (all 6 algorithms)
+3. Full experiment (300 steps, 300 vehicles, 6 algorithms) with per-step progress
+4. Plot generation (34 figure groups)
+5. Final comprehensive summary
+
+On the friend's fast machine, expect ~1-2 hours total.
 
 ---
 
-## 9. Run Complete Thesis Experiment (~1-2 hours)
+## 8. Regenerate Figures (if experiment already ran)
 
 ```powershell
 $env:SUMO_HOME = "C:\Program Files (x86)\Eclipse\Sumo"
-$env:PYTHONPATH = "src"
-python scripts/run_experiment.py --steps 300 --vehicles 300 --period 1.0 --seed 42 --algorithms dijkstra,astar,aco,bco,pso,e3hybrid --reroute-interval 10 --emergency-count 3 --request-count 100 --timeout 60.0
-```
-
----
-
-## 10. Regenerate All Figures (after experiment finishes)
-
-```powershell
-$env:PYTHONPATH = "src"
 python scripts/generate_all_plots.py
 ```
 
@@ -118,24 +110,16 @@ python scripts/generate_all_plots.py -o C:\Users\SAKIB\Desktop\thesis_figures
 
 ---
 
-## 11. Regenerate All Benchmarks
+## 9. Run Tests
 
 ```powershell
-python -m pytest tests/benchmarks/test_benchmarks.py -v
+$env:SUMO_HOME = "C:\Program Files (x86)\Eclipse\Sumo"
+python -m pytest tests/ -v
 ```
 
 ---
 
-## 12. Regenerate Reports
-
-```powershell
-# Summary tables are in: outputs\experiments\run_*\plots\data\
-Get-ChildItem outputs\experiments -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1 | ForEach-Object { Get-ChildItem "$_\plots\data" }
-```
-
----
-
-## 13. Clean Outputs (if needed)
+## 10. Clean Outputs (if needed)
 
 ```powershell
 Remove-Item -Recurse -Force "outputs\experiments\*" -ErrorAction SilentlyContinue
