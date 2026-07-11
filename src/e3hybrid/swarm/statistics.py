@@ -21,6 +21,7 @@ class IterationStatistics:
     diversity: float
     best_solution_changed: bool
     runtime_s: float
+    exploration_ratio: float = 1.0
 
     def __post_init__(self) -> None:
         if self.iteration < 0:

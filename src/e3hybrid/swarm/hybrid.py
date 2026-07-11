@@ -137,6 +137,9 @@ class HybridConfiguration:
     ant_ratio: float = 0.4
     bee_ratio: float = 0.3
     particle_ratio: float = 0.3
+    enable_ants: bool = True
+    enable_bees: bool = True
+    enable_particles: bool = True
 
     # Influence weights (initial)
     alpha_a: float = 1.0
@@ -181,13 +184,13 @@ class HybridConfiguration:
         self._validate()
 
     def _validate(self) -> None:
-        # Ratios must sum to 1.0
-        total_ratio = self.ant_ratio + self.bee_ratio + self.particle_ratio
-        if abs(total_ratio - 1.0) > 1e-9:
-            raise ValueError(
-                f"ant_ratio ({self.ant_ratio}) + bee_ratio ({self.bee_ratio}) + "
-                f"particle_ratio ({self.particle_ratio}) = {total_ratio}, must sum to 1.0"
-            )
+        if self.enable_ants and self.enable_bees and self.enable_particles:
+            total_ratio = self.ant_ratio + self.bee_ratio + self.particle_ratio
+            if abs(total_ratio - 1.0) > 1e-9:
+                raise ValueError(
+                    f"ant_ratio ({self.ant_ratio}) + bee_ratio ({self.bee_ratio}) + "
+                    f"particle_ratio ({self.particle_ratio}) = {total_ratio}, must sum to 1.0"
+                )
         if self.ant_ratio < 0 or self.bee_ratio < 0 or self.particle_ratio < 0:
             raise ValueError("ratios must be non-negative")
 
@@ -256,6 +259,9 @@ class HybridConfiguration:
             ant_ratio=_hp_float(hp, "ant_ratio", 0.4),
             bee_ratio=_hp_float(hp, "bee_ratio", 0.3),
             particle_ratio=_hp_float(hp, "particle_ratio", 0.3),
+            enable_ants=_hp_bool(hp, "enable_ants", True),
+            enable_bees=_hp_bool(hp, "enable_bees", True),
+            enable_particles=_hp_bool(hp, "enable_particles", True),
             alpha_a=_hp_float(hp, "alpha_a", 1.0),
             alpha_a_min=_hp_float(hp, "alpha_a_min", 0.1),
             alpha_a_max=_hp_float(hp, "alpha_a_max", 3.0),
@@ -310,6 +316,22 @@ def _hp_int(hp: dict[str, object], key: str, default: int) -> int:
     )
 
 
+def _hp_bool(hp: dict[str, object], key: str, default: bool) -> bool:
+    if key not in hp:
+        return default
+    val = hp[key]
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        if val.lower() in ("true", "1", "yes"):
+            return True
+        if val.lower() in ("false", "0", "no"):
+            return False
+    if isinstance(val, (int, float)):
+        return bool(val)
+    return default
+
+
 # =========================================================================
 # HybridStatistics
 # =========================================================================
@@ -324,6 +346,7 @@ class HybridStatistics:
     avg_cost: float
     worst_cost: float
     diversity: float
+    exploration_ratio: float
     alpha_a: float
     alpha_b: float
     alpha_p: float
@@ -487,6 +510,10 @@ class E3HybridRouting:
             # Compute diversity
             diversity = self._compute_diversity(routes)
 
+            # Compute exploration/exploitation ratio
+            exploration_ratio = self._compute_exploration_ratio(
+                routes, self._global_best_route, self._templates)
+
             # Record per-iteration stats
             success_costs = [c for c, s in zip(costs, states)
                            if s == IndividualStatus.COMPLETE and c < float("inf")]
@@ -499,6 +526,7 @@ class E3HybridRouting:
                 avg_cost=avg_cost,
                 worst_cost=worst_cost,
                 diversity=diversity,
+                exploration_ratio=exploration_ratio,
                 alpha_a=self._influence_weights.alpha_a,
                 alpha_b=self._influence_weights.alpha_b,
                 alpha_p=self._influence_weights.alpha_p,
@@ -554,9 +582,9 @@ class E3HybridRouting:
     def _assign_subpopulations(self, population_size: int) -> list[IndividualKind]:
         cfg = self._config
         total_ratio = cfg.ant_ratio + cfg.bee_ratio + cfg.particle_ratio
-        N_a = max(1, int(population_size * cfg.ant_ratio / total_ratio))
-        N_b = max(1, int(population_size * cfg.bee_ratio / total_ratio))
-        N_p = population_size - N_a - N_b
+        N_a = max(1, int(population_size * cfg.ant_ratio / total_ratio)) if cfg.enable_ants else 0
+        N_b = max(1, int(population_size * cfg.bee_ratio / total_ratio)) if cfg.enable_bees else 0
+        N_p = population_size - N_a - N_b if cfg.enable_particles else 0
 
         kinds: list[IndividualKind] = []
         for i in range(N_a):
@@ -940,6 +968,34 @@ class E3HybridRouting:
         avg_jaccard = similarity_sum / total_pairs
         return 1.0 - avg_jaccard
 
+    def _compute_exploration_ratio(
+        self,
+        routes: list[list[EdgeId]],
+        global_best: list[EdgeId],
+        templates: list[list[EdgeId]],
+    ) -> float:
+        """Fraction of edges explored that are NOT in known good routes.
+
+        A higher ratio means more exploration; lower means more exploitation.
+        """
+        gb_set = set(global_best)
+        tmpl_set: set[EdgeId] = set()
+        for t in templates:
+            tmpl_set |= set(t)
+        known = gb_set | tmpl_set
+        if not known:
+            return 1.0
+        total_new = 0
+        total_edges = 0
+        for r in routes:
+            for e in r:
+                if e not in known:
+                    total_new += 1
+                total_edges += 1
+        if total_edges == 0:
+            return 1.0
+        return total_new / total_edges
+
     # =====================================================================
     # Meta-Controller
     # =====================================================================
@@ -1148,6 +1204,7 @@ class E3HybridRouting:
                 diversity=s.diversity,
                 best_solution_changed=True,
                 runtime_s=s.runtime_s,
+                exploration_ratio=s.exploration_ratio,
             ))
         return result
 

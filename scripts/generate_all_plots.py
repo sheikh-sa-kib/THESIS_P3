@@ -269,10 +269,13 @@ def _save_fig(fig, stem: str, out_dir: Path):
     global plt
     png_dir = out_dir / "png"
     pdf_dir = out_dir / "pdf"
+    svg_dir = out_dir / "svg"
     png_dir.mkdir(parents=True, exist_ok=True)
     pdf_dir.mkdir(parents=True, exist_ok=True)
+    svg_dir.mkdir(parents=True, exist_ok=True)
     fig.savefig(png_dir / f"{stem}.png", dpi=300)
     fig.savefig(pdf_dir / f"{stem}.pdf", dpi=300)
+    fig.savefig(svg_dir / f"{stem}.svg", dpi=300)
     plt.close(fig)
 
 
@@ -1020,6 +1023,7 @@ def main() -> int:
     print(f"  Output: {out_dir}")
     print(f"    PNG:  {out_dir / 'png'}")
     print(f"    PDF:  {out_dir / 'pdf'}")
+    print(f"    SVG:  {out_dir / 'svg'}")
     print(f"    Data: {out_dir / 'data'}")
     print(f"{'=' * 60}")
 

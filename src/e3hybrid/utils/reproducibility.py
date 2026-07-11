@@ -6,6 +6,7 @@ number streams without using Python's module-level random functions directly.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import platform
 import random
@@ -34,9 +35,11 @@ class EnvironmentMetadata:
     sumo_version: str | None
     timestamp_utc: str
     random_seed: int
+    network_sha256: str | None
 
 
-def collect_environment_metadata(project_root: Path, random_seed: int) -> EnvironmentMetadata:
+def collect_environment_metadata(project_root: Path, random_seed: int,
+                                 network_file: Path | None = None) -> EnvironmentMetadata:
     """Collect environment metadata for a reproducible run record."""
 
     if random_seed < 0:
@@ -55,6 +58,7 @@ def collect_environment_metadata(project_root: Path, random_seed: int) -> Enviro
         sumo_version=None,
         timestamp_utc=datetime.now(UTC).isoformat(),
         random_seed=random_seed,
+        network_sha256=_compute_sha256(network_file) if network_file else None,
     )
 
 
@@ -125,4 +129,17 @@ def _read_cpu_count() -> int | None:
 
         return os.cpu_count()
     except OSError:
+        return None
+
+
+def _compute_sha256(file_path: Path) -> str | None:
+    """Compute SHA-256 checksum of a file for integrity verification."""
+
+    try:
+        h = hashlib.sha256()
+        with file_path.open("rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except (OSError, FileNotFoundError):
         return None
