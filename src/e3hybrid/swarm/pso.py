@@ -575,7 +575,7 @@ class PSORouting:
             if len(candidates) > 1:
                 alive = [e for e in candidates
                          if e.target == self._destination
-                         or len(list(self._graph.outgoing_edges(e.target))) > 0]
+                         or len(self._graph.outgoing_edges(e.target)) > 0]
                 if alive:
                     candidates = alive
 

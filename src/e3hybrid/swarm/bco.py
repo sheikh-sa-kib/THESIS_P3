@@ -475,7 +475,7 @@ class BCORouting:
                     non_deadend = [
                         e for e in feasible
                         if e.target == self._destination
-                        or len(list(self._graph.outgoing_edges(e.target))) > 0
+                        or len(self._graph.outgoing_edges(e.target)) > 0
                     ]
                     if non_deadend:
                         feasible = non_deadend

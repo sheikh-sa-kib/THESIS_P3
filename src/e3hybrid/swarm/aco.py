@@ -518,7 +518,7 @@ class AntColony:
     ) -> list[Ant]:
         destination = request.destination_node
         if max_steps is None:
-            max_steps = self._config.forward_steps if self._config.forward_steps else len(list(graph.nodes())) * 2
+            max_steps = self._config.forward_steps if self._config.forward_steps else len(graph.nodes()) * 2
 
         for ant in self._ants:
             ant.prev_node = None
@@ -651,7 +651,7 @@ class AntColony:
 # -------------------------------------------------------------------------
 
 def _is_edge_alive(edge: Edge, graph: DirectedGraph, dest: NodeId) -> bool:
-    return edge.target == dest or len(list(graph.outgoing_edges(edge.target))) > 0
+    return edge.target == dest or len(graph.outgoing_edges(edge.target)) > 0
 
 def _compute_edge_cost_sequence(edge_ids: list[EdgeId], graph: DirectedGraph) -> float:
     total = 0.0
@@ -790,7 +790,7 @@ class ACORouting:
 
         no_improvement_count = 0
         term_reason = ""
-        node_count = len(list(graph.nodes())) if graph is not None else 0
+        node_count = len(graph.nodes()) if graph is not None else 0
         max_steps = (
             self._config.forward_steps
             if self._config.forward_steps
