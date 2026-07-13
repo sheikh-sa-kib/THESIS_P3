@@ -44,7 +44,8 @@ class MetricsRow:
     emergency_events: int = 0
     max_congestion_edges: int = 0
     max_blocked_edges: int = 0
-    avg_travel_time_s: float = 0.0
+    avg_edge_congestion_s: float = 0.0
+    avg_journey_time_s: float = 0.0
     avg_speed_mps: float = 0.0
     throughput: int = 0
     completed_trips: int = 0
@@ -68,7 +69,7 @@ class StepRow:
     completed_trips: int = 0
     failed_trips: int = 0
     teleport_count: int = 0
-    travel_time_s: float = 0.0
+    avg_edge_congestion_s: float = 0.0
     reroute_latency_ms: float = 0.0
 
 
@@ -126,7 +127,8 @@ def read_metrics_csv(path: Path) -> list[MetricsRow]:
                 emergency_events=_parse_int(row.get("emergency_events", "0")),
                 max_congestion_edges=_parse_int(row.get("max_congestion_edges", "0")),
                 max_blocked_edges=_parse_int(row.get("max_blocked_edges", "0")),
-                avg_travel_time_s=_parse_float(row.get("avg_travel_time_s", "0")),
+                avg_edge_congestion_s=_parse_float(row.get("avg_edge_congestion_s", row.get("avg_travel_time_s", "0"))),
+                avg_journey_time_s=_parse_float(row.get("avg_journey_time_s", "0")),
                 avg_speed_mps=_parse_float(row.get("avg_speed_mps", "0")),
                 throughput=_parse_int(row.get("throughput", "0")),
                 completed_trips=_parse_int(row.get("completed_trips", "0")),
@@ -159,7 +161,7 @@ def read_step_csv(path: Path) -> list[StepRow]:
                 completed_trips=_parse_int(row.get("completed_trips", "0")),
                 failed_trips=_parse_int(row.get("failed_trips", "0")),
                 teleport_count=_parse_int(row.get("teleport_count", "0")),
-                travel_time_s=_parse_float(row.get("travel_time_s", "0")),
+                avg_edge_congestion_s=_parse_float(row.get("avg_edge_congestion_s", row.get("travel_time_s", "0"))),
                 reroute_latency_ms=_parse_float(row.get("reroute_latency_ms", "0")),
             )
             rows.append(s)
@@ -313,10 +315,10 @@ def _line(ax, x_vals, y_dict, xlabel="", ylabel="", title=""):
 
 
 def fig_bar_travel_time(data: ExpData, out_dir: Path):
-    names, vals = _names_and_vals(_sorted_metrics(data), "avg_travel_time_s")
+    names, vals = _names_and_vals(_sorted_metrics(data), "avg_edge_congestion_s")
     fig, ax = plt.subplots(figsize=(8, 4.5))
-    _bar(ax, names, vals, ylabel="Average Travel Time (s)", title="Average Travel Time per Route")
-    _save_fig(fig, "bar_avg_travel_time", out_dir)
+    _bar(ax, names, vals, ylabel="Average Edge Congestion (s)", title="Average Edge Congestion")
+    _save_fig(fig, "bar_avg_edge_congestion", out_dir)
 
 
 def fig_bar_execution_time(data: ExpData, out_dir: Path):
@@ -537,16 +539,16 @@ def fig_line_travel_time(data: ExpData, out_dir: Path):
     for algo in ALGO_ORDER:
         grp = groups.get(algo, [])
         if grp:
-            tt = [s.travel_time_s for s in grp]
+            tt = [s.avg_edge_congestion_s for s in grp]
             if any(v > 0 for v in tt):
                 y_dict[algo] = tt
     if not y_dict:
         plt.close(fig)
         return
     steps = list(range(len(next(iter(y_dict.values())))))
-    _line(ax, steps, y_dict, xlabel="Simulation Step", ylabel="Travel Time (s)",
-          title="Average Travel Time Over Time")
-    _save_fig(fig, "line_travel_time", out_dir)
+    _line(ax, steps, y_dict, xlabel="Simulation Step", ylabel="Edge Congestion (s)",
+          title="Average Edge Congestion Over Time")
+    _save_fig(fig, "line_edge_congestion", out_dir)
 
 
 def fig_line_reroute_latency(data: ExpData, out_dir: Path):
@@ -597,7 +599,7 @@ def fig_boxplot_travel_time(data: ExpData, out_dir: Path):
     for algo in ALGO_ORDER:
         grp = groups.get(algo, [])
         if grp:
-            tt = [s.travel_time_s for s in grp if s.travel_time_s > 0]
+            tt = [s.avg_edge_congestion_s for s in grp if s.avg_edge_congestion_s > 0]
             if tt:
                 datasets.append(tt)
                 labels.append(algo)
@@ -610,11 +612,11 @@ def fig_boxplot_travel_time(data: ExpData, out_dir: Path):
     ax.set_xticklabels(labels, rotation=30, ha="right")
     for patch, color in zip(bp["boxes"], ALGO_COLORS[:len(datasets)]):
         patch.set_facecolor(color)
-    ax.set_ylabel("Travel Time (s)")
-    ax.set_title("Travel Time Distribution Across Algorithms")
+    ax.set_ylabel("Edge Congestion (s)")
+    ax.set_title("Edge Congestion Distribution Across Algorithms")
     ax.tick_params(axis="x", rotation=30)
     ax.grid(axis="y", alpha=0.3)
-    _save_fig(fig, "boxplot_travel_time", out_dir)
+    _save_fig(fig, "boxplot_edge_congestion", out_dir)
 
 
 def fig_violin_travel_time(data: ExpData, out_dir: Path):
@@ -625,7 +627,7 @@ def fig_violin_travel_time(data: ExpData, out_dir: Path):
     for algo in ALGO_ORDER:
         grp = groups.get(algo, [])
         if grp:
-            tt = [s.travel_time_s for s in grp if s.travel_time_s > 0]
+            tt = [s.avg_edge_congestion_s for s in grp if s.avg_edge_congestion_s > 0]
             if tt:
                 datasets.append(tt)
                 labels.append(algo)
@@ -638,10 +640,10 @@ def fig_violin_travel_time(data: ExpData, out_dir: Path):
         pc.set_alpha(0.7)
     ax.set_xticks(range(1, len(labels) + 1))
     ax.set_xticklabels(labels, rotation=30, ha="right")
-    ax.set_ylabel("Travel Time (s)")
-    ax.set_title("Travel Time Distribution (Violin Plot)")
+    ax.set_ylabel("Edge Congestion (s)")
+    ax.set_title("Edge Congestion Distribution (Violin Plot)")
     ax.grid(axis="y", alpha=0.3)
-    _save_fig(fig, "violin_travel_time", out_dir)
+    _save_fig(fig, "violin_edge_congestion", out_dir)
 
 
 def fig_histogram_speed(data: ExpData, out_dir: Path):
@@ -667,15 +669,15 @@ def fig_histogram_travel_time(data: ExpData, out_dir: Path):
     for i, algo in enumerate(ALGO_ORDER):
         grp = groups.get(algo, [])
         if grp:
-            tt = [s.travel_time_s for s in grp if s.travel_time_s > 0]
+            tt = [s.avg_edge_congestion_s for s in grp if s.avg_edge_congestion_s > 0]
             if tt:
                 ax.hist(tt, bins=20, alpha=0.5, label=algo, color=ALGO_COLORS[i])
-    ax.set_xlabel("Travel Time (s)")
+    ax.set_xlabel("Edge Congestion (s)")
     ax.set_ylabel("Frequency")
-    ax.set_title("Distribution of Travel Times")
+    ax.set_title("Distribution of Edge Congestion")
     ax.legend()
     ax.grid(axis="y", alpha=0.3)
-    _save_fig(fig, "hist_travel_time", out_dir)
+    _save_fig(fig, "hist_edge_congestion", out_dir)
 
 
 def fig_cdf_travel_time(data: ExpData, out_dir: Path):
@@ -684,16 +686,16 @@ def fig_cdf_travel_time(data: ExpData, out_dir: Path):
     for i, algo in enumerate(ALGO_ORDER):
         grp = groups.get(algo, [])
         if grp:
-            tt = sorted([s.travel_time_s for s in grp if s.travel_time_s > 0])
+            tt = sorted([s.avg_edge_congestion_s for s in grp if s.avg_edge_congestion_s > 0])
             if tt:
                 cdf = [j / len(tt) for j in range(len(tt))]
                 ax.plot(tt, cdf, label=algo, color=ALGO_COLORS[i], linewidth=1.5)
-    ax.set_xlabel("Travel Time (s)")
+    ax.set_xlabel("Edge Congestion (s)")
     ax.set_ylabel("Cumulative Probability")
-    ax.set_title("CDF of Travel Times")
+    ax.set_title("CDF of Edge Congestion")
     ax.legend()
     ax.grid(alpha=0.3)
-    _save_fig(fig, "cdf_travel_time", out_dir)
+    _save_fig(fig, "cdf_edge_congestion", out_dir)
 
 
 def fig_cdf_speed(data: ExpData, out_dir: Path):
@@ -723,15 +725,15 @@ def fig_scatter_speed_vs_travel(data: ExpData, out_dir: Path):
         grp = groups.get(algo, [])
         if grp:
             speeds = [s.avg_speed_mps for s in grp]
-            ttimes = [s.travel_time_s for s in grp]
+            ttimes = [s.avg_edge_congestion_s for s in grp]
             if any(s > 0 for s in speeds) and any(t > 0 for t in ttimes):
                 ax.scatter(speeds, ttimes, label=algo, color=ALGO_COLORS[i], alpha=0.5, s=15)
     ax.set_xlabel("Average Speed (m/s)")
-    ax.set_ylabel("Travel Time (s)")
-    ax.set_title("Speed vs Travel Time")
+    ax.set_ylabel("Edge Congestion (s)")
+    ax.set_title("Speed vs Edge Congestion")
     ax.legend()
     ax.grid(alpha=0.3)
-    _save_fig(fig, "scatter_speed_vs_travel", out_dir)
+    _save_fig(fig, "scatter_speed_vs_congestion", out_dir)
 
 
 # ---- Heatmap ----
@@ -772,7 +774,7 @@ def fig_dashboard_metrics(data: ExpData, out_dir: Path):
         return
     names = [m.algorithm for m in metrics]
     bar_specs = [
-        ("Travel Time (s)", [m.avg_travel_time_s for m in metrics]),
+        ("Edge Congestion (s)", [m.avg_edge_congestion_s for m in metrics]),
         ("Execution Time (s)", [m.total_execution_s for m in metrics]),
         ("Memory (MB)", [m.peak_memory_mb for m in metrics]),
         ("Reroutes", [m.total_reroutes for m in metrics]),
@@ -836,13 +838,14 @@ def write_summary_table(data: ExpData, out_dir: Path):
     with path.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["Algorithm", "Steps", "Vehicles", "Reroutes", "Emergencies",
-                     "MaxCongestion", "MaxBlocked", "AvgTravelTime_s", "AvgSpeed_mps",
+                     "MaxCongestion", "MaxBlocked", "AvgEdgeCongestion_s", "AvgJourneyTime_s", "AvgSpeed_mps",
                      "Throughput", "Completed", "Failed", "Teleports",
                      "AvgRerouteLat_ms", "Exec_s", "PeakMem_MB"])
         for m in metrics:
             w.writerow([m.algorithm, m.total_steps, m.total_vehicles, m.total_reroutes,
                         m.emergency_events, m.max_congestion_edges, m.max_blocked_edges,
-                        f"{m.avg_travel_time_s:.3f}", f"{m.avg_speed_mps:.3f}",
+                        f"{m.avg_edge_congestion_s:.3f}", f"{m.avg_journey_time_s:.3f}",
+                        f"{m.avg_speed_mps:.3f}",
                         m.throughput, m.completed_trips, m.failed_trips,
                         m.teleport_count, f"{m.avg_rerouting_latency_ms:.3f}",
                         f"{m.total_execution_s:.3f}", f"{m.peak_memory_mb:.3f}"])
@@ -890,7 +893,7 @@ def write_summary_table(data: ExpData, out_dir: Path):
         w.writerow(["algorithm", "metric", "value"])
         for m in metrics:
             for field in ("total_reroutes", "emergency_events", "max_congestion_edges",
-                          "max_blocked_edges", "avg_travel_time_s", "avg_speed_mps",
+                          "max_blocked_edges", "avg_edge_congestion_s", "avg_speed_mps",
                           "throughput", "completed_trips", "failed_trips",
                           "teleport_count", "avg_rerouting_latency_ms",
                           "total_execution_s", "peak_memory_mb"):
@@ -903,7 +906,7 @@ def write_summary_table(data: ExpData, out_dir: Path):
 # ---------------------------------------------------------------------------
 
 _FIGURE_FUNCS = [
-    ("Bar: Average Travel Time", fig_bar_travel_time),
+    ("Bar: Average Edge Congestion", fig_bar_travel_time),
     ("Bar: Execution Time", fig_bar_execution_time),
     ("Bar: Memory Usage", fig_bar_memory),
     ("Bar: Total Reroutes", fig_bar_reroutes),
@@ -924,16 +927,16 @@ _FIGURE_FUNCS = [
     ("Line: Completed Trips", fig_line_completed),
     ("Line: Teleports", fig_line_teleports),
     ("Line: Average Speed", fig_line_speed),
-    ("Line: Travel Time", fig_line_travel_time),
+    ("Line: Edge Congestion", fig_line_travel_time),
     ("Line: Reroute Latency", fig_line_reroute_latency),
     ("Line: Blocked Edges", fig_line_blocked),
-    ("Boxplot: Travel Time", fig_boxplot_travel_time),
-    ("Violin: Travel Time", fig_violin_travel_time),
+    ("Boxplot: Edge Congestion", fig_boxplot_travel_time),
+    ("Violin: Edge Congestion", fig_violin_travel_time),
     ("Histogram: Speed", fig_histogram_speed),
-    ("Histogram: Travel Time", fig_histogram_travel_time),
-    ("CDF: Travel Time", fig_cdf_travel_time),
+    ("Histogram: Edge Congestion", fig_histogram_travel_time),
+    ("CDF: Edge Congestion", fig_cdf_travel_time),
     ("CDF: Speed", fig_cdf_speed),
-    ("Scatter: Speed vs Travel Time", fig_scatter_speed_vs_travel),
+    ("Scatter: Speed vs Edge Congestion", fig_scatter_speed_vs_travel),
     ("Heatmap: Congestion", fig_heatmap_congestion),
     ("Dashboard: Metrics", fig_dashboard_metrics),
     ("Dashboard: Routing", fig_dashboard_routing),

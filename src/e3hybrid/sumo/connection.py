@@ -292,3 +292,10 @@ class SumoTraciConnection:
             return self._mod.simulation.getArrivedNumber()
         except Exception:
             return 0
+
+    def get_arrived_ids(self) -> list[str]:
+        """Return list of vehicle IDs that arrived this timestep."""
+        try:
+            return list(self._mod.simulation.getArrivedIDList())
+        except Exception:
+            return []

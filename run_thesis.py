@@ -158,7 +158,7 @@ def _imports() -> None:
         completed_trips: int = 0
         failed_trips: int = 0
         teleport_count: int = 0
-        travel_time_s: float = 0.0
+        avg_edge_congestion_s: float = 0.0
         reroute_latency_ms: float = 0.0
 
     @dataclass
@@ -170,9 +170,8 @@ def _imports() -> None:
         emergency_events: int = 0
         max_congestion_edges: int = 0
         max_blocked_edges: int = 0
-        avg_travel_time_s: float = 0.0
-        avg_waiting_time_s: float = 0.0
-        avg_route_length_edges: int = 0
+        avg_edge_congestion_s: float = 0.0
+        avg_journey_time_s: float = 0.0
         avg_speed_mps: float = 0.0
         throughput: int = 0
         completed_trips: int = 0
@@ -336,6 +335,8 @@ def simulate_algorithm(
         reroute_latencies = []
         step_log = []
         travel_times = []
+        vehicle_departures: dict[str, int] = {}
+        vehicle_journey_times: list[float] = []
 
         # Emergency schedule
         active_emergencies: dict[int, dict] = {}
@@ -402,9 +403,16 @@ def simulate_algorithm(
                     del active_emergencies[key]
 
             vehicles = conn.get_vehicle_ids()
+            for vid in vehicles:
+                if vid not in vehicle_departures:
+                    vehicle_departures[vid] = s
             active = len(vehicles)
             total_teleports += conn.get_teleport_count()
             completed += conn.get_arrived_count()
+            for vid in conn.get_arrived_ids():
+                dep_step = vehicle_departures.get(vid, s)
+                journey_time = s - dep_step
+                vehicle_journey_times.append(journey_time)
 
             congestion = 0
             blocked = 0
@@ -491,7 +499,7 @@ def simulate_algorithm(
                 completed_trips=completed,
                 failed_trips=failed,
                 teleport_count=total_teleports,
-                travel_time_s=sum(step_travel_times) / len(step_travel_times) if step_travel_times else 0.0,
+                avg_edge_congestion_s=sum(step_travel_times) / len(step_travel_times) if step_travel_times else 0.0,
                 reroute_latency_ms=sum(step_reroute_latencies) / len(step_reroute_latencies) if step_reroute_latencies else 0.0,
             ))
 
@@ -532,7 +540,8 @@ def simulate_algorithm(
     result.emergency_events = total_emergency
     result.max_congestion_edges = max(s.congestion_edges for s in step_log) if step_log else 0
     result.max_blocked_edges = max(s.blocked_edges for s in step_log) if step_log else 0
-    result.avg_travel_time_s = sum(travel_times) / len(travel_times) if travel_times else 0.0
+    result.avg_edge_congestion_s = sum(travel_times) / len(travel_times) if travel_times else 0.0
+    result.avg_journey_time_s = sum(vehicle_journey_times) / len(vehicle_journey_times) if vehicle_journey_times else 0.0
     result.avg_speed_mps = sum(s.avg_speed_mps for s in step_log) / len(step_log) if step_log else 0.0
     result.throughput = completed
     result.completed_trips = completed
@@ -626,13 +635,13 @@ def write_step_csv(all_step_logs: dict[str, list], path: Path) -> None:
         w.writerow(["algorithm", "step", "active_vehicles", "reroutes",
                      "emergency_events", "blocked_edges", "congestion_edges",
                      "avg_speed_mps", "completed_trips", "failed_trips",
-                     "teleport_count", "travel_time_s", "reroute_latency_ms"])
+                     "teleport_count", "avg_edge_congestion_s", "reroute_latency_ms"])
         for algo_name, steps in all_step_logs.items():
             for s in steps:
                 w.writerow([algo_name, s.step, s.active_vehicles, s.total_reroutes,
                            s.emergency_events, s.blocked_edges, s.congestion_edges,
                            f"{s.avg_speed_mps:.3f}", s.completed_trips, s.failed_trips,
-                           s.teleport_count, f"{s.travel_time_s:.3f}",
+                           s.teleport_count, f"{s.avg_edge_congestion_s:.3f}",
                            f"{s.reroute_latency_ms:.3f}"])
 
 
@@ -640,7 +649,8 @@ def write_metrics_csv(results: list, path: Path) -> None:
     fieldnames = [
         "algorithm", "total_steps", "total_vehicles", "total_reroutes",
         "emergency_events", "max_congestion_edges", "max_blocked_edges",
-        "avg_travel_time_s", "avg_speed_mps", "throughput", "completed_trips",
+        "avg_edge_congestion_s", "avg_journey_time_s", "avg_speed_mps",
+        "throughput", "completed_trips",
         "failed_trips", "teleport_count", "avg_rerouting_latency_ms",
         "total_execution_s", "peak_memory_mb",
     ]
@@ -651,7 +661,8 @@ def write_metrics_csv(results: list, path: Path) -> None:
             w.writerow([
                 r.algo, r.total_steps, r.total_vehicles, r.total_reroutes,
                 r.emergency_events, r.max_congestion_edges, r.max_blocked_edges,
-                f"{r.avg_travel_time_s:.3f}", f"{r.avg_speed_mps:.3f}",
+                f"{r.avg_edge_congestion_s:.3f}", f"{r.avg_journey_time_s:.3f}",
+                f"{r.avg_speed_mps:.3f}",
                 r.throughput, r.completed_trips, r.failed_trips,
                 r.teleport_count, f"{r.avg_rerouting_latency_ms:.3f}",
                 f"{r.total_execution_s:.3f}", f"{r.peak_memory_mb:.3f}",
@@ -909,7 +920,8 @@ def run_experiment(config: ExperimentConfig, resume: bool = False) -> Path | Non
                         r.emergency_events = int(row["emergency_events"])
                         r.max_congestion_edges = int(row["max_congestion_edges"])
                         r.max_blocked_edges = int(row["max_blocked_edges"])
-                        r.avg_travel_time_s = float(row["avg_travel_time_s"])
+                        r.avg_edge_congestion_s = float(row.get("avg_edge_congestion_s", row.get("avg_travel_time_s", "0")))
+                        r.avg_journey_time_s = float(row.get("avg_journey_time_s", "0"))
                         r.avg_speed_mps = float(row["avg_speed_mps"])
                         r.throughput = int(row["throughput"])
                         r.completed_trips = int(row["completed_trips"])
@@ -931,11 +943,11 @@ def run_experiment(config: ExperimentConfig, resume: bool = False) -> Path | Non
     with timing_path.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["algorithm", "step", "avg_reroute_latency_ms", "active_vehicles",
-                     "completed_trips", "travel_time_s"])
+                     "completed_trips", "avg_edge_congestion_s"])
         for r in sim_results:
             for s in r.step_log:
                 w.writerow([r.algo, s.step, f"{s.reroute_latency_ms:.3f}",
-                           s.active_vehicles, s.completed_trips, f"{s.travel_time_s:.3f}"])
+                           s.active_vehicles, s.completed_trips, f"{s.avg_edge_congestion_s:.3f}"])
     print(f"  [TIMING] {timing_path}")
 
     # Emergency log
@@ -1122,17 +1134,17 @@ def print_final_summary(output_dir: Path, sim_results: list, t_total: float) -> 
     metrics_csv = output_dir / "metrics_summary.csv"
     if metrics_csv.exists():
         print("  " + "-" * 58)
-        print(f"  {'Algorithm':<12} {'Travel(s)':<10} {'Speed':<8} {'Reroutes':<9} "
-              f"{'Thruput':<8} {'Emerg':<6} {'Telport':<8} {'Exec(s)':<9} {'Mem(MB)':<8}")
-        print("  " + "-" * 58)
+        print(f"  {'Algorithm':<12} {'Congest(s)':<10} {'Journey(s)':<10} {'Speed':<8} "
+              f"{'Reroutes':<9} {'Thruput':<8} {'Emerg':<6} {'Exec(s)':<9} {'Mem(MB)':<8}")
+        print("  " + "-" * 72)
         with metrics_csv.open(encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                print(f"  {row['algorithm']:<12} {row['avg_travel_time_s']:<10} "
+                print(f"  {row['algorithm']:<12} {row.get('avg_edge_congestion_s', row.get('avg_travel_time_s', '?')):<10} "
+                      f"{row.get('avg_journey_time_s', '?'):<10} "
                       f"{row['avg_speed_mps']:<8} {row['total_reroutes']:<9} "
                       f"{row['throughput']:<8} {row['emergency_events']:<6} "
-                      f"{row['teleport_count']:<8} {row['total_execution_s']:<9} "
-                      f"{row['peak_memory_mb']:<8}")
+                      f"{row['total_execution_s']:<9} {row['peak_memory_mb']:<8}")
         print()
 
     # Read routing benchmarks
@@ -1326,7 +1338,8 @@ def main(argv: list[str] | None = None) -> int:
                 r.emergency_events = int(row["emergency_events"])
                 r.max_congestion_edges = int(row["max_congestion_edges"])
                 r.max_blocked_edges = int(row["max_blocked_edges"])
-                r.avg_travel_time_s = float(row["avg_travel_time_s"])
+                r.avg_edge_congestion_s = float(row.get("avg_edge_congestion_s", row.get("avg_travel_time_s", "0")))
+                r.avg_journey_time_s = float(row.get("avg_journey_time_s", "0"))
                 r.avg_speed_mps = float(row["avg_speed_mps"])
                 r.throughput = int(row["throughput"])
                 r.completed_trips = int(row["completed_trips"])

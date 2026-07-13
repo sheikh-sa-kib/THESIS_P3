@@ -50,7 +50,8 @@ except ImportError:
 class AlgorithmMetrics:
     """Aggregated metrics for one algorithm across all seeds."""
     name: str
-    travel_time_s: list[float] = field(default_factory=list)
+    edge_congestion_s: list[float] = field(default_factory=list)
+    journey_time_s: list[float] = field(default_factory=list)
     avg_speed_mps: list[float] = field(default_factory=list)
     total_reroutes: list[int] = field(default_factory=list)
     throughput: list[int] = field(default_factory=list)
@@ -121,7 +122,8 @@ def compare_algorithms(metrics_a: AlgorithmMetrics,
     """Compare two algorithms across all metrics."""
     results: dict[str, StatisticalResult] = {}
     metric_fields = [
-        ("travel_time_s", "Travel Time (s)"),
+        ("edge_congestion_s", "Edge Congestion (s)"),
+        ("journey_time_s", "Journey Time (s)"),
         ("avg_speed_mps", "Avg Speed (m/s)"),
         ("total_reroutes", "Total Reroutes"),
         ("throughput", "Throughput"),
@@ -190,7 +192,8 @@ def load_metrics_csv(path: Path) -> dict[str, AlgorithmMetrics]:
             if name not in algos:
                 algos[name] = AlgorithmMetrics(name=name)
             am = algos[name]
-            am.travel_time_s.append(float(row.get("avg_travel_time_s", 0)))
+            am.edge_congestion_s.append(float(row.get("avg_edge_congestion_s", row.get("avg_travel_time_s", "0"))))
+            am.journey_time_s.append(float(row.get("avg_journey_time_s", "0")))
             am.avg_speed_mps.append(float(row.get("avg_speed_mps", 0)))
             am.total_reroutes.append(int(row.get("total_reroutes", 0)))
             am.throughput.append(int(row.get("throughput", 0)))
@@ -212,7 +215,8 @@ def aggregate_across_seeds(seed_dirs: list[Path]) -> dict[str, AlgorithmMetrics]
             if name not in combined:
                 combined[name] = AlgorithmMetrics(name=name)
             ca = combined[name]
-            ca.travel_time_s.extend(am.travel_time_s)
+            ca.edge_congestion_s.extend(am.edge_congestion_s)
+            ca.journey_time_s.extend(am.journey_time_s)
             ca.avg_speed_mps.extend(am.avg_speed_mps)
             ca.total_reroutes.extend(am.total_reroutes)
             ca.throughput.extend(am.throughput)
@@ -382,11 +386,13 @@ def main() -> int:
     algo_names = sorted(all_algos.keys())
     print(f"Found algorithms: {', '.join(algo_names)}")
     for name, am in all_algos.items():
-        n = len(am.travel_time_s)
+        n = len(am.edge_congestion_s)
         print(f"  {name}: {n} data points")
         if n > 0:
-            print(f"    Travel time: {pystats.mean(am.travel_time_s):.2f} ± "
-                  f"{pystats.stdev(am.travel_time_s) if n > 1 else 0:.2f} s")
+            print(f"    Edge congestion: {pystats.mean(am.edge_congestion_s):.2f} ± "
+                  f"{pystats.stdev(am.edge_congestion_s) if n > 1 else 0:.2f} s")
+            print(f"    Journey time: {pystats.mean(am.journey_time_s):.2f} ± "
+                  f"{pystats.stdev(am.journey_time_s) if len(am.journey_time_s) > 1 else 0:.2f} s")
             print(f"    Speed: {pystats.mean(am.avg_speed_mps):.2f} ± "
                   f"{pystats.stdev(am.avg_speed_mps) if n > 1 else 0:.2f} m/s")
             print(f"    Throughput: {pystats.mean(am.throughput):.0f}")
@@ -431,8 +437,9 @@ def main() -> int:
         "scipy_available": HAS_SCIPY,
         "algorithms": {
             name: {
-                "n": len(am.travel_time_s),
-                "travel_time_mean": round(pystats.mean(am.travel_time_s), 4) if am.travel_time_s else None,
+                "n": len(am.edge_congestion_s),
+                "edge_congestion_mean": round(pystats.mean(am.edge_congestion_s), 4) if am.edge_congestion_s else None,
+                "journey_time_mean": round(pystats.mean(am.journey_time_s), 4) if am.journey_time_s else None,
                 "speed_mean": round(pystats.mean(am.avg_speed_mps), 4) if am.avg_speed_mps else None,
                 "throughput_mean": round(pystats.mean(am.throughput), 2) if am.throughput else None,
                 "execution_mean_s": round(pystats.mean(am.execution_s), 4) if am.execution_s else None,
