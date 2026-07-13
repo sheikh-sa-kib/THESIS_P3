@@ -8,7 +8,9 @@ Usage:
     python run_thesis.py --preset heavy
     python run_thesis.py --preset extreme
     python run_thesis.py --preset heavy --seeds 42 43 44
-    python run_thesis.py --preset heavy --resume             (resume interrupted run)
+    python run_thesis.py --preset heavy --resume                      (auto-detect latest run dir)
+    python run_thesis.py --preset heavy --resume --resume-dir outputs/experiments/run_20260712_095200
+                                                                    (resume specific directory)
 
 Presets:
     smoke    — installation verification (10s runtime)
@@ -240,19 +242,21 @@ def run_validation() -> int:
 _CHECKPOINT_FILE = "checkpoint.json"
 
 
-def _save_checkpoint(output_dir: Path, algo_name: str, step: int, total_steps: int,
-                     elapsed_s: float, phase: str = "online") -> None:
+def _atomic_write_json(path: Path, data: Any) -> None:
+    """Write JSON atomically: temp file + rename."""
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _save_checkpoint(output_dir: Path, completed_algos: dict[str, Any],
+                     postproc_done: bool = False) -> None:
     cp = {
-        "algo": algo_name,
-        "step": step,
-        "total_steps": total_steps,
-        "elapsed_s": round(elapsed_s, 2),
-        "phase": phase,
+        "completed_algos": completed_algos,
+        "post_processing_done": postproc_done,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
-    (output_dir / _CHECKPOINT_FILE).write_text(
-        json.dumps(cp, indent=2), encoding="utf-8"
-    )
+    _atomic_write_json(output_dir / _CHECKPOINT_FILE, cp)
 
 
 def _load_checkpoint(output_dir: Path) -> dict[str, Any] | None:
@@ -269,6 +273,67 @@ def _clear_checkpoint(output_dir: Path) -> None:
     cp_path = output_dir / _CHECKPOINT_FILE
     if cp_path.exists():
         cp_path.unlink(missing_ok=True)
+    tmp = output_dir / "checkpoint.json.tmp"
+    if tmp.exists():
+        tmp.unlink(missing_ok=True)
+
+
+def _find_latest_run_dir(root: Path) -> Path | None:
+    """Return the most recent run_YYYYMMDD_HHMMSS directory under *root*."""
+    candidates = sorted(
+        [d for d in root.iterdir() if d.is_dir() and d.name.startswith("run_")],
+        key=lambda d: d.name,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+def _verify_algorithm_outputs(output_dir: Path, algo: str,
+                              expected_steps: int) -> tuple[bool, str]:
+    """Check that an algorithm's output files exist and are complete.
+
+    Returns (ok, message).
+    """
+    sim_csv = output_dir / "simulation_log.csv"
+    metrics_csv = output_dir / "metrics_summary.csv"
+    route_file = output_dir / f"{algo}.rou.xml"
+
+    if not route_file.exists():
+        return False, f"missing route file {route_file.name}"
+
+    if not metrics_csv.exists():
+        return False, "metrics_summary.csv not found"
+
+    # Read metrics CSV and confirm algo row exists
+    try:
+        with metrics_csv.open(encoding="utf-8") as f:
+            found = False
+            for row in csv.DictReader(f):
+                if row.get("algorithm", "").strip() == algo:
+                    found = True
+                    break
+        if not found:
+            return False, f"no row for '{algo}' in metrics_summary.csv"
+    except Exception as e:
+        return False, f"cannot read metrics_summary.csv: {e}"
+
+    if not sim_csv.exists():
+        return False, "simulation_log.csv not found"
+
+    # Count rows for this algorithm in simulation log
+    try:
+        step_count = 0
+        with sim_csv.open(encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if row.get("algorithm", "").strip() == algo:
+                    step_count += 1
+        if step_count < expected_steps:
+            return (False,
+                    f"simulation_log.csv has {step_count}/{expected_steps} steps for '{algo}'")
+    except Exception as e:
+        return False, f"cannot read simulation_log.csv: {e}"
+
+    return True, "complete"
 
 
 # ===================================================================
@@ -760,7 +825,8 @@ def run_offline_benchmarks(
     return results
 
 
-def run_experiment(config: ExperimentConfig, resume: bool = False) -> Path | None:
+def run_experiment(config: ExperimentConfig, resume: bool = False,
+                   resume_dir: Path | None = None) -> Path | None:
     _imports()
     print()
     print("=" * 72)
@@ -775,129 +841,149 @@ def run_experiment(config: ExperimentConfig, resume: bool = False) -> Path | Non
             print(f"  [ERROR] {lbl} not found: {fp}")
             return None
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    output_dir = OUTPUT_ROOT / f"run_{timestamp}"
-    output_dir.mkdir(parents=True, exist_ok=False)
-    plot_dir = output_dir / "plots"
-    plot_dir.mkdir(parents=True, exist_ok=True)
+    # ── Directory setup: resume vs fresh ──────────────────────────
+    completed_algos: dict[str, Any] = {}
+    postproc_done = False
+    is_resumed = False
 
-    print(f"  Output: {output_dir}")
-    print()
-    print("  Generated artifacts after completion:")
-    print(f"    metrics_summary.csv     — Per-algorithm metrics table")
-    print(f"    simulation_log.csv      — Per-step simulation log")
-    print(f"    emergency_log.csv       — Emergency event timeline")
-    print(f"    algorithm_timing.csv    — Algorithm execution timing")
-    print(f"    routing_log.csv         — Offline routing benchmarks")
-    print(f"    config_snapshot.yaml    — Full experiment configuration")
-    print(f"    experiment_manifest.json— Machine-readable experiment record")
-    print(f"    git_commit.txt          — Pinned repository commit")
-    print(f"    environment.json        — Python/SUMO/OS environment")
-    print(f"    network_metadata.json   — Network graph properties")
-    print(f"    plots/png/              — 34 publication-ready figures (raster)")
-    print(f"    plots/pdf/              — 34 publication-ready figures (vector)")
-    print(f"    plots/svg/              — 34 publication-ready figures (editable)")
-    print(f"    plots/data/             — Plot source data CSVs")
-    print()
+    if resume:
+        target_dir = resume_dir or _find_latest_run_dir(OUTPUT_ROOT)
+        if target_dir is None:
+            print("  [ERROR] --resume specified but no run_* directory found")
+            print(f"         in {OUTPUT_ROOT}. Run without --resume to start fresh.")
+            return None
+        output_dir = target_dir
+        is_resumed = True
+        print(f"  [RESUME] Using existing directory: {output_dir}")
 
-    # Environment + git
-    env = collect_environment()
-    env["experiment_config"] = asdict(config)
-    (output_dir / "environment.json").write_text(
-        json.dumps(env, indent=2, default=str), encoding="utf-8"
-    )
-    (output_dir / "git_commit.txt").write_text(get_git_commit(), encoding="utf-8")
+        cp = _load_checkpoint(output_dir)
+        if cp:
+            completed_algos = cp.get("completed_algos", {})
+            postproc_done = cp.get("post_processing_done", False)
+            if completed_algos:
+                print(f"  [RESUME] Checkpoint: {len(completed_algos)} algos complete, "
+                      f"postproc={'done' if postproc_done else 'pending'}")
 
-    # Config snapshot
-    if yaml:
-        cfg_snapshot = {
-            "experiment_name": "E3-Hybrid Full Thesis Experiment",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "project_version": "0.1.0",
+        # Also scan metrics CSV for algos not yet in checkpoint
+        metrics_csv = output_dir / "metrics_summary.csv"
+        if metrics_csv.exists():
+            try:
+                csv_algos = set()
+                with metrics_csv.open(encoding="utf-8") as f:
+                    for row in csv.DictReader(f):
+                        a = row.get("algorithm", "").strip()
+                        if a:
+                            csv_algos.add(a)
+                for a in csv_algos:
+                    if a not in completed_algos:
+                        ok, msg = _verify_algorithm_outputs(output_dir, a, config.steps)
+                        if ok:
+                            completed_algos[a] = {"status": "completed", "steps": config.steps}
+                            print(f"  [RESUME] Detected completed algo '{a}' from metrics CSV")
+            except Exception:
+                pass
+
+        print(f"  [RESUME] Skipping {len(completed_algos)} completed algorithm(s)")
+        print()
+    else:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        output_dir = OUTPUT_ROOT / f"run_{timestamp}"
+        output_dir.mkdir(parents=True, exist_ok=False)
+        plot_dir = output_dir / "plots"
+        plot_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write metadata files only on fresh run
+        env = collect_environment()
+        env["experiment_config"] = asdict(config)
+        (output_dir / "environment.json").write_text(
+            json.dumps(env, indent=2, default=str), encoding="utf-8"
+        )
+        (output_dir / "git_commit.txt").write_text(get_git_commit(), encoding="utf-8")
+
+        if yaml:
+            cfg_snapshot = {
+                "experiment_name": "E3-Hybrid Full Thesis Experiment",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "project_version": "0.1.0",
+                "sumo_version": env.get("sumo_version", "unknown"),
+                "python_version": sys.version.split()[0],
+                "network_file": str(NET_FILE),
+                "route_file": str(ROUTE_FILE),
+                "algorithms": list(config.algorithms),
+                "simulation": {
+                    "steps": config.steps,
+                    "vehicles": config.vehicles,
+                    "departure_period_s": config.departure_period,
+                    "seed": config.seed,
+                    "reroute_interval_steps": config.reroute_interval,
+                    "emergency_count": config.emergency_count,
+                },
+                "benchmarks": {
+                    "offline_requests": 50,
+                    "timeout_s": 30.0,
+                    "seed": config.seed + 1,
+                },
+                "reproducibility": {
+                    "python_seed": config.seed,
+                    "sumo_seed": config.seed,
+                    "benchmark_seed": config.seed + 1,
+                    "emergency_seed": config.seed + 2000,
+                    "git_commit": get_git_commit(),
+                },
+            }
+            (output_dir / "config_snapshot.yaml").write_text(
+                yaml.dump(cfg_snapshot, default_flow_style=False), encoding="utf-8"
+            )
+
+        network_sha256 = _compute_file_sha256(NET_FILE)
+        manifest = {
+            "git_commit": get_git_commit(),
+            "git_tag": _get_git_tag(),
             "sumo_version": env.get("sumo_version", "unknown"),
             "python_version": sys.version.split()[0],
-            "network_file": str(NET_FILE),
-            "route_file": str(ROUTE_FILE),
+            "network": str(NET_FILE.name),
+            "network_sha256": network_sha256,
+            "vehicle_count": config.vehicles,
+            "simulation_steps": config.steps,
             "algorithms": list(config.algorithms),
-            "simulation": {
-                "steps": config.steps,
-                "vehicles": config.vehicles,
-                "departure_period_s": config.departure_period,
-                "seed": config.seed,
-                "reroute_interval_steps": config.reroute_interval,
-                "emergency_count": config.emergency_count,
-            },
-            "benchmarks": {
-                "offline_requests": 50,
-                "timeout_s": 30.0,
-                "seed": config.seed + 1,
-            },
-            "reproducibility": {
-                "python_seed": config.seed,
-                "sumo_seed": config.seed,
-                "benchmark_seed": config.seed + 1,
-                "emergency_seed": config.seed + 2000,
-                "git_commit": get_git_commit(),
-            },
+            "seed": config.seed,
+            "date": datetime.now(timezone.utc).isoformat(),
+            "machine": platform.node() or os.environ.get("COMPUTERNAME", "unknown"),
+            "output_directory": str(output_dir),
         }
-        (output_dir / "config_snapshot.yaml").write_text(
-            yaml.dump(cfg_snapshot, default_flow_style=False), encoding="utf-8"
+        (output_dir / "experiment_manifest.json").write_text(
+            json.dumps(manifest, indent=2), encoding="utf-8"
         )
+        print(f"  [MANIFEST] {output_dir / 'experiment_manifest.json'}")
 
-    # Network SHA256 checksum
-    network_sha256 = _compute_file_sha256(NET_FILE)
+    print(f"  Output: {output_dir}")
 
-    # Experiment manifest (machine-readable)
-    manifest = {
-        "git_commit": get_git_commit(),
-        "git_tag": _get_git_tag(),
-        "sumo_version": env.get("sumo_version", "unknown"),
-        "python_version": sys.version.split()[0],
-        "network": str(NET_FILE.name),
-        "network_sha256": network_sha256,
-        "vehicle_count": config.vehicles,
-        "simulation_steps": config.steps,
-        "algorithms": list(config.algorithms),
-        "seed": config.seed,
-        "date": datetime.now(timezone.utc).isoformat(),
-        "machine": platform.node() or os.environ.get("COMPUTERNAME", "unknown"),
-        "output_directory": str(output_dir),
-    }
-    (output_dir / "experiment_manifest.json").write_text(
-        json.dumps(manifest, indent=2), encoding="utf-8"
-    )
-    print(f"  [MANIFEST] {output_dir / 'experiment_manifest.json'}")
-
-    # Simulate each algorithm
+    # ── Algorithm simulation loop ─────────────────────────────────
     t_exp_start = time.time()
     sim_results: list[AlgorithmResult] = []
 
-    # Checkpoint/resume: determine which algorithms are already done
-    done_algos: set[str] = set()
-    if resume:
-        cp = _load_checkpoint(output_dir)
-        if cp:
-            done_algos.add(cp.get("algo", ""))
-            print(f"  [RESUME] Found checkpoint for '{cp.get('algo')}' at step {cp.get('step')}")
-        # Also check for completed metrics in CSV
-        metrics_csv_test = output_dir / "metrics_summary.csv"
-        if metrics_csv_test.exists():
-            with metrics_csv_test.open(encoding="utf-8") as f:
-                for row in csv.DictReader(f):
-                    done_algos.add(row.get("algorithm", ""))
-            print(f"  [RESUME] Previously completed: {', '.join(sorted(done_algos))}")
-
     for i, algo in enumerate(config.algorithms):
-        if resume and algo in done_algos:
-            print(f"  [{i+1}/{len(config.algorithms)}] {algo.upper()}  [SKIP — already completed]")
-            continue
+        # Check if this algorithm is already fully completed
+        if algo in completed_algos:
+            ok, msg = _verify_algorithm_outputs(output_dir, algo, config.steps)
+            if ok:
+                print(f"  [{i+1}/{len(config.algorithms)}] {algo.upper()}  "
+                      f"[SKIP — verified complete]")
+                continue
+            else:
+                print(f"  [{i+1}/{len(config.algorithms)}] {algo.upper()}  "
+                      f"[RE-RUN — previous output incomplete: {msg}]")
+                # Remove from completed so it runs
+                del completed_algos[algo]
+
         print(f"  {'=' * 58}")
         print(f"  [{i+1}/{len(config.algorithms)}] {algo.upper()}")
         print(f"  {'=' * 58}")
-        result = simulate_algorithm(algo, config, output_dir, i + 1, len(config.algorithms), t_exp_start)
+        result = simulate_algorithm(algo, config, output_dir,
+                                    i + 1, len(config.algorithms), t_exp_start)
         sim_results.append(result)
-        _save_checkpoint(output_dir, algo, config.steps, config.steps,
-                         result.total_execution_s, phase="online")
+        completed_algos[algo] = {"status": "completed", "steps": config.steps}
+        _save_checkpoint(output_dir, completed_algos, postproc_done)
         print(f"  {'-' * 58}")
         print(f"  [{i+1}/{len(config.algorithms)}] {algo.upper()} DONE  "
               f"exec={selfmt(result.total_execution_s)}  "
@@ -905,36 +991,40 @@ def run_experiment(config: ExperimentConfig, resume: bool = False) -> Path | Non
               f"mem={result.peak_memory_mb:.1f}MB")
         print()
 
-    # Re-read metrics CSV if resuming (to include previously completed algos)
-    if resume and done_algos:
-        metrics_csv_test = output_dir / "metrics_summary.csv"
-        if metrics_csv_test.exists():
-            with metrics_csv_test.open(encoding="utf-8") as f:
+    # ── Merge previously completed algo data into sim_results ─────
+    metrics_csv = output_dir / "metrics_summary.csv"
+    if metrics_csv.exists():
+        existing_algos = {r.algo for r in sim_results}
+        try:
+            with metrics_csv.open(encoding="utf-8") as f:
                 for row in csv.DictReader(f):
-                    if row["algorithm"] not in [r.algo for r in sim_results]:
+                    a = row.get("algorithm", "").strip()
+                    if a and a not in existing_algos:
                         r = AlgorithmResult()
-                        r.algo = row["algorithm"]
-                        r.total_steps = int(row["total_steps"])
-                        r.total_vehicles = int(row["total_vehicles"])
-                        r.total_reroutes = int(row["total_reroutes"])
-                        r.emergency_events = int(row["emergency_events"])
-                        r.max_congestion_edges = int(row["max_congestion_edges"])
-                        r.max_blocked_edges = int(row["max_blocked_edges"])
-                        r.avg_edge_congestion_s = float(row.get("avg_edge_congestion_s", row.get("avg_travel_time_s", "0")))
+                        r.algo = a
+                        r.total_steps = int(row.get("total_steps", 0))
+                        r.total_vehicles = int(row.get("total_vehicles", 0))
+                        r.total_reroutes = int(row.get("total_reroutes", 0))
+                        r.emergency_events = int(row.get("emergency_events", 0))
+                        r.max_congestion_edges = int(row.get("max_congestion_edges", 0))
+                        r.max_blocked_edges = int(row.get("max_blocked_edges", 0))
+                        r.avg_edge_congestion_s = float(row.get("avg_edge_congestion_s",
+                                                     row.get("avg_travel_time_s", "0")))
                         r.avg_journey_time_s = float(row.get("avg_journey_time_s", "0"))
-                        r.avg_speed_mps = float(row["avg_speed_mps"])
-                        r.throughput = int(row["throughput"])
-                        r.completed_trips = int(row["completed_trips"])
-                        r.failed_trips = int(row["failed_trips"])
-                        r.teleport_count = int(row["teleport_count"])
-                        r.avg_rerouting_latency_ms = float(row["avg_rerouting_latency_ms"])
-                        r.total_execution_s = float(row["total_execution_s"])
-                        r.peak_memory_mb = float(row["peak_memory_mb"])
+                        r.avg_speed_mps = float(row.get("avg_speed_mps", 0))
+                        r.throughput = int(row.get("throughput", 0))
+                        r.completed_trips = int(row.get("completed_trips", 0))
+                        r.failed_trips = int(row.get("failed_trips", 0))
+                        r.teleport_count = int(row.get("teleport_count", 0))
+                        r.avg_rerouting_latency_ms = float(row.get("avg_rerouting_latency_ms", 0))
+                        r.total_execution_s = float(row.get("total_execution_s", 0))
+                        r.peak_memory_mb = float(row.get("peak_memory_mb", 0))
+                        r.step_log = _load_step_log_for_algo(output_dir, a)
                         sim_results.append(r)
+        except Exception:
+            pass
 
-    _clear_checkpoint(output_dir)
-
-    # Write result CSVs
+    # ── Write / rewrite result CSVs (all algos, fresh) ────────────
     write_step_csv({r.algo: r.step_log for r in sim_results}, output_dir / "simulation_log.csv")
     write_metrics_csv(sim_results, output_dir / "metrics_summary.csv")
 
@@ -947,11 +1037,13 @@ def run_experiment(config: ExperimentConfig, resume: bool = False) -> Path | Non
         for r in sim_results:
             for s in r.step_log:
                 w.writerow([r.algo, s.step, f"{s.reroute_latency_ms:.3f}",
-                           s.active_vehicles, s.completed_trips, f"{s.avg_edge_congestion_s:.3f}"])
+                           s.active_vehicles, s.completed_trips,
+                           f"{s.avg_edge_congestion_s:.3f}"])
     print(f"  [TIMING] {timing_path}")
 
     # Emergency log
     emerg_path = output_dir / "emergency_log.csv"
+    has_events = False
     with emerg_path.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["algorithm", "step", "emergency_events", "blocked_edges",
@@ -959,53 +1051,107 @@ def run_experiment(config: ExperimentConfig, resume: bool = False) -> Path | Non
         for r in sim_results:
             for s in r.step_log:
                 if s.emergency_events > 0:
+                    has_events = True
                     w.writerow([r.algo, s.step, s.emergency_events,
                                s.blocked_edges, s.congestion_edges, s.active_vehicles])
-    if emerg_path.stat().st_size > 0:
+    if has_events:
         print(f"  [EMERG] {emerg_path}")
     else:
         emerg_path.unlink(missing_ok=True)
 
-    # Offline benchmarks (only if enabled)
-    if getattr(config, 'offline_benchmarks', True):
-        print()
-        print(f"  {'=' * 58}")
-        print("  OFFLINE ROUTING BENCHMARKS")
-        print(f"  {'=' * 58}")
-        routing_results = run_offline_benchmarks(
-            config.algorithms, 50, config.seed + 1, 30.0, output_dir,
-        )
-        routing_path = output_dir / "routing_log.csv"
-        with routing_path.open("w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(["algorithm", "success_rate", "avg_runtime_s", "max_runtime_s",
-                         "min_runtime_s", "avg_distance_m", "successes", "failures",
-                         "total_requests"])
-            for algo_name, stats in routing_results.items():
-                w.writerow([algo_name,
-                           f"{stats['success_rate']:.3f}",
-                           f"{stats['avg_runtime_s']:.6f}",
-                           f"{stats['max_runtime_s']:.6f}",
-                           f"{stats['min_runtime_s']:.6f}",
-                           f"{stats['avg_distance_m']:.1f}",
-                           stats['successes'],
-                           stats['failures'],
-                           stats['total_requests']])
+    # ── Offline benchmarks (skip if already done and verified) ────
+    routing_log_exists = (output_dir / "routing_log.csv").exists()
+    routing_log_ok = False
+    if routing_log_exists:
+        try:
+            with (output_dir / "routing_log.csv").open(encoding="utf-8") as f:
+                routing_rows = list(csv.DictReader(f))
+                if len(routing_rows) >= len(config.algorithms):
+                    routing_log_ok = True
+        except Exception:
+            pass
 
-    # Network metadata
+    if getattr(config, 'offline_benchmarks', True):
+        if is_resumed and routing_log_ok:
+            print()
+            print("  [SKIP] Offline benchmarks already completed")
+        else:
+            print()
+            print(f"  {'=' * 58}")
+            print("  OFFLINE ROUTING BENCHMARKS")
+            print(f"  {'=' * 58}")
+            routing_results = run_offline_benchmarks(
+                config.algorithms, 50, config.seed + 1, 30.0, output_dir,
+            )
+            with (output_dir / "routing_log.csv").open("w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["algorithm", "success_rate", "avg_runtime_s", "max_runtime_s",
+                             "min_runtime_s", "avg_distance_m", "successes", "failures",
+                             "total_requests"])
+                for algo_name, stats in routing_results.items():
+                    w.writerow([algo_name,
+                               f"{stats['success_rate']:.3f}",
+                               f"{stats['avg_runtime_s']:.6f}",
+                               f"{stats['max_runtime_s']:.6f}",
+                               f"{stats['min_runtime_s']:.6f}",
+                               f"{stats['avg_distance_m']:.1f}",
+                               stats['successes'],
+                               stats['failures'],
+                               stats['total_requests']])
+
+    # ── Network metadata ──────────────────────────────────────────
     last_algo = config.algorithms[-1]
     last_route = output_dir / f"{last_algo}.rou.xml"
     if last_route.exists():
-        sumo_cfg_last = SumoConfig(
-            sumo_net_file=NET_FILE, sumo_route_file=last_route,
-            sumo_seed=config.seed, use_gui=False,
-        )
-        conn = SumoTraciConnection(sumo_cfg_last)
-        conn.start()
-        write_network_metadata(conn, output_dir / "network_metadata.json")
-        conn.stop()
+        try:
+            sumo_cfg_last = SumoConfig(
+                sumo_net_file=NET_FILE, sumo_route_file=last_route,
+                sumo_seed=config.seed, use_gui=False,
+            )
+            conn = SumoTraciConnection(sumo_cfg_last)
+            conn.start()
+            write_network_metadata(conn, output_dir / "network_metadata.json")
+            conn.stop()
+        except Exception:
+            pass
 
+    # ── Final checkpoint — keep until post-processing confirms ────
+    _save_checkpoint(output_dir, completed_algos, postproc_done=False)
     return output_dir
+
+
+def _load_step_log_for_algo(output_dir: Path, algo: str) -> list[StepMetrics]:
+    """Reload per-step data for a previously-completed algorithm from CSV."""
+    steps: list[StepMetrics] = []
+    sim_csv = output_dir / "simulation_log.csv"
+    if not sim_csv.exists():
+        return steps
+    try:
+        with sim_csv.open(encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if row.get("algorithm", "").strip() == algo:
+                    s = StepMetrics(
+                        step=int(row.get("step", 0)),
+                        active_vehicles=int(row.get("active_vehicles", 0)),
+                        total_reroutes=int(row.get("reroutes", 0)),
+                        emergency_events=int(row.get("emergency_events", 0)),
+                        blocked_edges=int(row.get("blocked_edges", 0)),
+                        congestion_edges=int(row.get("congestion_edges", 0)),
+                        avg_speed_mps=float(row.get("avg_speed_mps", 0)),
+                        completed_trips=int(row.get("completed_trips", 0)),
+                        failed_trips=int(row.get("failed_trips", 0)),
+                        teleport_count=int(row.get("teleport_count", 0)),
+                        avg_edge_congestion_s=float(
+                            row.get("avg_edge_congestion_s",
+                                    row.get("travel_time_s", "0"))
+                        ),
+                        reroute_latency_ms=float(row.get("reroute_latency_ms", 0)),
+                    )
+                    steps.append(s)
+    except Exception:
+        pass
+    steps.sort(key=lambda s: s.step)
+    return steps
 
 
 # ===================================================================
@@ -1262,8 +1408,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     resume_mode = "--resume" in argv
+    resume_dir: Path | None = None
     if resume_mode:
         argv.remove("--resume")
+        # Check for --resume-dir <path>
+        if "--resume-dir" in argv:
+            idx = argv.index("--resume-dir")
+            if idx + 1 < len(argv):
+                resume_dir = Path(argv[idx + 1]).resolve()
+                argv.pop(idx + 1)
+                argv.pop(idx)
 
     preset_name, seeds = _resolve_preset(argv)
     pc = PRESETS[preset_name]
@@ -1306,7 +1460,7 @@ def main(argv: list[str] | None = None) -> int:
             offline_benchmarks=pc["offline_benchmarks"],
         )
 
-        output_dir = run_experiment(config, resume=resume_mode)
+        output_dir = run_experiment(config, resume=resume_mode, resume_dir=resume_dir)
         if not output_dir:
             return 1
         all_output_dirs.append(output_dir)
@@ -1314,6 +1468,13 @@ def main(argv: list[str] | None = None) -> int:
     # Step 4: Plot generation (only if preset says so)
     if pc["generate_plots"]:
         run_plot_generation()
+        # Mark post-processing as done in checkpoint
+        try:
+            cp = _load_checkpoint(output_dir) or {}
+            completed_algos = cp.get("completed_algos", {})
+            _save_checkpoint(output_dir, completed_algos, postproc_done=True)
+        except Exception:
+            pass
     else:
         print()
         print("=" * 72)
@@ -1351,6 +1512,10 @@ def main(argv: list[str] | None = None) -> int:
                 sim_results.append(r)
 
     print_final_summary(last_dir, sim_results, t_total)
+
+    # Clear checkpoint — full pipeline completed successfully
+    for d in all_output_dirs:
+        _clear_checkpoint(d)
 
     # Summary of all seed outputs
     if len(seeds) > 1:

@@ -314,6 +314,36 @@ The `heavy` preset is the recommended one-command thesis experiment.
 
 ---
 
+### 9.1 Resuming an Interrupted Experiment
+
+If the experiment is interrupted (Windows shutdown, power failure, Ctrl+C, Python crash):
+
+```bash
+# Auto-detect the latest run directory and continue
+python run_thesis.py --preset heavy --resume
+
+# Or specify a specific run directory
+python run_thesis.py --preset heavy --resume --resume-dir outputs/experiments/run_20260712_095200
+```
+
+**What happens on resume:**
+
+| Scenario | Recovery |
+|----------|----------|
+| Crash during algorithm #3 | #1, #2 verified complete → skipped. #3 starts from scratch. |
+| Crash during CSV write | Truncated CSVs detected (wrong row count). All algos re-run. |
+| Crash during plot generation | CSVs intact → algos skipped → plots regenerated. |
+| Power failure mid-algorithm | Same as crash. Verified algos skipped. |
+| Re-run after full success | All algos verified → all skipped → CSVs rewritten. Safe no-op. |
+
+**Key design points:**
+- Checkpoint is saved **atomically** (temp file + `os.replace`) — survives power loss mid-write.
+- Each completed algorithm's output is **individually verified** (step count, row count, file existence).
+- Checkpoint is **cleared only after** the entire pipeline (simulation + plots + summary) finishes.
+- Multi-seed experiments: each seed directory is independent and recoverable separately.
+
+---
+
 ## 10. Running Validation Experiments
 
 ```bash

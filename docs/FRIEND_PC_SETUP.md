@@ -79,6 +79,42 @@ Remove-Item -Recurse -Force "outputs\validation\*" -ErrorAction SilentlyContinue
 
 ---
 
+## If the experiment is interrupted (shutdown / crash / Ctrl+C)
+
+The experiment checkpoint system **auto-recovers**. Do NOT delete any output files.
+
+```powershell
+# Just re-run with --resume — it auto-detects the latest run directory
+python run_thesis.py --preset heavy --resume
+```
+
+Or specify a specific directory:
+```powershell
+python run_thesis.py --preset heavy --resume --resume-dir outputs/experiments/run_20260712_095200
+```
+
+### What the recovery system does:
+
+| Scenario | Behavior |
+|----------|----------|
+| **Crash during algorithm #3** | Algorithms #1, #2 are verified complete and skipped. Algorithm #3 restarts from scratch. |
+| **Crash during CSV writing** | Incomplete CSVs are detected (wrong row count). All algorithms re-run. |
+| **Crash during plot generation** | CSVs are intact. Algorithms skipped. Plots regenerated. |
+| **Power failure mid-algorithm** | Same as crash — completed algos are verified and skipped. |
+| **Keyboard interrupt (Ctrl+C)** | Same — last completed algo's checkpoint is loaded. |
+| **Re-run after full success** | All algos verified, all skipped, CSVs rewritten, plots regenerated. Safe no-op. |
+
+### Recovery guarantees:
+
+- **Never re-runs** an algorithm whose output files (`metrics_summary.csv`,
+  `simulation_log.csv`, `.rou.xml`) are verified complete.
+- **Checkpoint is written atomically** (temp file + rename) — survives power loss mid-write.
+- **Multi-seed safe** — each seed creates its own `run_*` directory independently.
+- **Checkpoint is cleared** only after the ENTIRE pipeline (simulation + plots + summary)
+  completes successfully.
+
+---
+
 ## If SUMO is not installed
 
 Download from https://sumo.dlr.de/download/ — install **SUMO 1.27.1**
